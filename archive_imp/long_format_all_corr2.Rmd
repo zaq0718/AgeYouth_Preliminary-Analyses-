@@ -1,0 +1,148 @@
+---
+title: "test"
+output: html_notebook
+---
+
+
+
+```{r setup, include=TRUE}
+# Load Required Libraries and Import Data
+library(openxlsx)   # for reading/writing Excel files
+library(dplyr)      # for data manipulation
+library(tidyr)      # for reshaping data
+library(stringr)    # for string pattern matching
+
+# Define file paths
+file_path <- "data/included_studies_1-13.xlsx"           # input file path
+output_path <- "output/long_format_with_all_corr.xlsx" # unused output path
+
+# Read the Excel file starting from row 2, assuming headers start there
+data <- read.xlsx(file_path, startRow = 2)
+
+# 🔧 Function to clean and standardize column names
+clean_names <- function(x) {
+  x <- gsub('["\']', "", x)          # Remove quotation marks
+  x <- gsub("&#10;?", "", x)         # Remove HTML newline codes
+  x <- gsub("[\r\n]", "", x)         # Remove actual newline characters
+  x <- trimws(x)                     # Trim leading/trailing spaces
+  x <- gsub("\\s+", "", x)           # Remove inner spaces
+  return(x)
+}
+
+# Apply the cleaning function to column names
+names(data) <- clean_names(names(data))
+
+```
+
+
+```{r static-and-dynamic-columns}
+# Define Static Columns and Filter WB Variables
+
+
+# List of static columns (subject identifiers, authors, year, etc.)
+keep_static <- c("0_IDF", "1_ID", "1.1_CaseID", "2_Author", "3_Year", "29_WbPoint")
+
+# Regex patterns to match dynamic WB columns
+wb_patterns <- c(
+  "^\\d+_WBmt\\d+$",           # e.g. 12_WBmt1
+  "^\\d+_WBsdt\\d+$",          # e.g. 12_WBsdt1
+  "^\\d+_WBt(\\d+)t(\\d+)$",   # e.g. 12_WBt1t2
+  "^\\d+_WBcort(\\d+)t(\\d+)$" # e.g. 12_WBcort1t2
+)
+
+# Collect columns that match the WB patterns
+wb_cols <- unique(unlist(lapply(wb_patterns, function(p) grep(p, names(data), value = TRUE, ignore.case = TRUE))))
+
+
+#wb_cols <- wb_cols[sapply(wb_cols)]
+
+# Combine static and dynamic columns
+all_cols <- intersect(c(keep_static, wb_cols), names(data))
+
+# Subset the data with selected columns
+data <- data[, all_cols, drop = FALSE]
+
+# Convert all non-static (i.e., dynamic WB) columns to numeric
+data[setdiff(names(data), keep_static)] <- lapply(data[setdiff(names(data), keep_static)], as.numeric)
+
+```
+
+```{r Adding time intervals}
+# Define Time Intervals
+timepoints <- 1:11                       # From timepoint 1 to 11 (for intervals 1-2 to 11-12)
+intervals <- paste0(timepoints, "-", timepoints + 1)  # Create interval labels (e.g., "1-2", "2-3", etc.)
+
+# Prepare an empty list to store reshaped rows
+long_rows <- list()
+
+```
+
+
+```{r Transform Each Row into Long Format}
+
+long_rows <- list()
+max_t <- 12  # max timepoint
+
+for (i in 1:nrow(data)) {
+  static_info <- data[i, keep_static]
+
+  for (t1 in 1:(max_t - 1)) {
+    for (t2 in (t1 + 1):max_t) {
+      interval_label <- paste0(t1, "-", t2)
+
+      # Find the exact column names
+      mt1 <- grep(paste0("_WBmt", t1, "$"), names(data), value = TRUE)
+      sdt1 <- grep(paste0("_WBsdt", t1, "$"), names(data), value = TRUE)
+      mt2 <- grep(paste0("_WBmt", t2, "$"), names(data), value = TRUE)
+      sdt2 <- grep(paste0("_WBsdt", t2, "$"), names(data), value = TRUE)
+      tlag <- grep(paste0("_WBt", t1, "t", t2, "$"), names(data), value = TRUE)
+      corr <- grep(paste0("_WBcort", t1, "t", t2, "$"), names(data), value = TRUE)
+
+      # Create the row with only relevant fields
+      row <- static_info
+      row$interval <- interval_label
+
+      for (col in c(mt1, sdt1, mt2, sdt2, tlag, corr)) {
+        row[[col]] <- data[[col]][i]
+      }
+
+      long_rows[[length(long_rows) + 1]] <- row
+    }
+  }
+}
+
+# Combine all rows
+long_data <- bind_rows(long_rows) # Combine all reshaped rows into a single data frame
+
+```
+
+
+```{r Timepoints processing}
+# Add Timepoints and Rename Original Column
+
+long_data <- long_data %>%
+  mutate(timepoints = as.numeric(`29_WbPoint`)) %>%  # Convert timepoints to numeric
+  select(-`29_WbPoint`)                              # Rename original WB point column
+
+
+```
+
+
+```{r Filter Rows Based on Timepoints}
+
+# Add interval start (e.g., for "1-2", interval_start = 1)
+long_data$interval_start <- as.numeric(sub("-.*", "", long_data$interval))
+
+# Retain only rows where interval start < max timepoints
+long_data <- long_data %>%
+  filter(is.na(timepoints) | interval_start < timepoints) %>%
+  select(-interval_start)  # Drop temporary column
+
+```
+
+```{r Output}
+# Write Final Output to Excel (unstyled)
+write.xlsx(long_data, "output/long_format_with_all_corr_type2.xlsx", rowNames = FALSE)
+cat("Final long-format Excel written successfully with original column names intact.")
+
+```

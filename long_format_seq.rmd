@@ -1,0 +1,314 @@
+---
+title: "Converting Agewell Codesheet to long Format Sequential"
+author: "Prerana Chandratre"
+output: html_notebook
+---
+
+```{r}
+# Run this file before running the 'new_long_format_nonseq.rmd' file for the final results
+```
+
+```{r setup, include=TRUE}
+# Load Required Libraries and Import Data
+library(openxlsx)   # for reading/writing Excel files
+library(dplyr)      # for data manipulation
+library(tidyr)      # for reshaping data
+library(stringr)    # for string pattern matching
+
+# Define file paths
+file_path <- "data/included_studies_1-13.xlsx"           # input file path
+output_path <- "output/long_format_with_seq_corr.xlsx" # unused output path
+
+# Read the Excel file starting from row 2, assuming headers start there
+data <- read.xlsx(file_path, startRow = 2)
+
+#  Function to clean and standardize column names
+clean_names <- function(x) {
+  x <- gsub('["\']', "", x)          # Remove quotation marks
+  x <- gsub("&#10;?", "", x)         # Remove HTML newline codes
+  x <- gsub("[\r\n]", "", x)         # Remove actual newline characters
+  x <- trimws(x)                     # Trim leading/trailing spaces
+  x <- gsub("\\s+", "", x)           # Remove inner spaces
+  return(x)
+}
+
+# Apply the cleaning function to column names
+names(data) <- clean_names(names(data))
+
+```
+
+
+```{r static-and-dynamic-columns}
+# Define Static Columns and Filter WB Variables
+
+
+# List of static columns (subject identifiers, authors, year, etc.)
+keep_static <- c("0_IDF", "1_ID", "1.1_CaseID", "2_Author", "3_Year", "29_WbPoint", "10_Size")
+
+# Regex patterns to match dynamic WB columns
+wb_patterns <- c(
+  "^\\d+_WBmt\\d+$",           # e.g. 12_WBmt1
+  "^\\d+_WBsdt\\d+$",          # e.g. 12_WBsdt1
+  "^\\d+_WBt(\\d+)t(\\d+)$",   # e.g. 12_WBt1t2
+  "^\\d+_WBcort(\\d+)t(\\d+)$" # e.g. 12_WBcort1t2
+)
+
+# Collect columns that match the WB patterns
+wb_cols <- unique(unlist(lapply(wb_patterns, function(p) grep(p, names(data), value = TRUE, ignore.case = TRUE))))
+
+# Filter to include only time-sequential intervals (e.g., 1-2, 2-3, ... 11-12)
+is_sequential <- function(name) {
+  match <- str_match(name, "t(\\d+)t(\\d+)")
+  #if (any(is.na(match[1, 2:3]))) return(TRUE) 
+  if (is.na(match[1,2]) || is.na(match[1,3])) return(TRUE)  # Allow mt/sdt columns without time ranges
+  return(as.integer(match[1,3]) - as.integer(match[1,2]) == 1)  # Ensure intervals are sequential
+  #return(as.integer(match[1, 3]) - as.integer(match[1, 2]) == 1)
+}
+wb_cols <- wb_cols[sapply(wb_cols, is_sequential)]
+
+# Combine static and dynamic columns
+all_cols <- intersect(c(keep_static, wb_cols), names(data))
+
+# Subset the data with selected columns
+data <- data[, all_cols, drop = FALSE]
+
+# Convert all non-static (i.e., dynamic WB) columns to numeric
+data[setdiff(names(data), keep_static)] <- lapply(data[setdiff(names(data), keep_static)], as.numeric)
+
+```
+
+```{r Adding time intervals}
+# Define Time Intervals
+timepoints <- 1:11                       # From timepoint 1 to 11 (for intervals 1-2 to 11-12)
+intervals <- paste0(timepoints, "-", timepoints + 1)  # Create interval labels (e.g., "1-2", "2-3", etc.)
+
+# Prepare an empty list to store reshaped rows
+long_rows <- list()
+
+```
+
+
+```{r Transform Each Row into Long Format}
+
+# Predefine expected WBmt and WBsdt column names
+all_wbmt_cols <- paste0("_WBmt", 1:12)
+all_wbsdt_cols <- paste0("_WBsdt", 1:12)
+
+# Loop over each case/row
+for (i in 1:nrow(data)) {
+  static_info <- data[i, keep_static]  # Extract static info for this row
+
+  # Iterate over each time interval (1-2, 2-3, ..., 11-12)
+  for (tp in timepoints) {
+    interval_label <- paste0(tp, "-", tp + 1)
+
+    # Dynamically get column names for required variables for this interval
+    mean1_col       <- grep(paste0("_WBmt", tp, "$"), names(data), value = TRUE, ignore.case = TRUE)
+    sd1_col         <- grep(paste0("_WBsdt", tp, "$"), names(data), value = TRUE, ignore.case = TRUE)
+    mean2_col       <- grep(paste0("_WBmt", tp + 1, "$"), names(data), value = TRUE, ignore.case = TRUE)
+    sd2_col         <- grep(paste0("_WBsdt", tp + 1, "$"), names(data), value = TRUE, ignore.case = TRUE)
+    timelag_col     <- grep(paste0("_WBt", tp, "t", tp + 1, "$"), names(data), value = TRUE, ignore.case = TRUE)
+    correlation_col <- grep(paste0("_WBcort", tp, "t", tp + 1, "$"), names(data), value = TRUE, ignore.case = TRUE)
+
+    # Skip if any key column is missing
+    if (length(mean1_col) != 1 || length(sd1_col) != 1 ||
+        length(mean2_col) != 1 || length(sd2_col) != 1 ||
+        length(timelag_col) != 1 || length(correlation_col) != 1) {
+      next
+    }
+
+    # Create a new row for long format
+    row <- static_info
+    row$interval <- interval_label
+    row[[mean1_col]] <- data[[mean1_col]][i]
+    row[[sd1_col]] <- data[[sd1_col]][i]
+    row[[mean2_col]] <- data[[mean2_col]][i]
+    row[[sd2_col]] <- data[[sd2_col]][i]
+    row[[timelag_col]] <- data[[timelag_col]][i]
+    row[[correlation_col]] <- data[[correlation_col]][i]
+
+    # Append the constructed row to long_rows list
+    long_rows[[length(long_rows) + 1]] <- row
+  }
+
+  # Ensure all mean/sd columns are present in each row even if NA
+  for (col in c(all_wbmt_cols, all_wbsdt_cols)) {
+    if (!(col %in% names(row))) {
+      row[[col]] <- NA
+    }
+  }
+}
+
+
+```
+
+```{r Merging Output}
+# Combine Long Format Data
+long_format <- bind_rows(long_rows)     # Combine all reshaped rows into a single data frame
+long_format[long_format == ""] <- NA    # Replace empty strings with NA
+
+```
+
+```{r Timepoints processing}
+# Add Timepoints and Rename Original Column
+
+long_format <- long_format %>%
+  mutate(timepoints = as.numeric(`29_WbPoint`)) %>%  # Convert timepoints to numeric
+  select(-`29_WbPoint`)                              # Rename original WB point column
+
+
+```
+
+
+```{r Filter Rows Based on Timepoints}
+
+# Add interval start (e.g., for "1-2", interval_start = 1)
+long_format$interval_start <- as.numeric(sub("-.*", "", long_format$interval))
+
+# Retain only rows where interval start < max timepoints
+long_format <- long_format %>%
+  filter(is.na(timepoints) | interval_start < timepoints) %>%
+  select(-interval_start)  # Drop temporary column
+
+```
+
+
+```{r Validation for accurate Output}
+# Sanity Check on Key Columns
+cols_to_check <- c("0_IDF", "1_ID", "2_Author", "3_Year", "10_Size")
+
+# Check if these columns exist in the data and print their types
+for (col in cols_to_check) {
+  if (col %in% names(long_format)) {
+    cat(col, ":", class(long_format[[col]]), "\n")
+  } else {
+    cat(col, ": NOT FOUND in long_format\n")
+  }
+}
+
+```
+
+```{r Reorder columns manually from Data }
+
+# Reorder columns manually by specifying the desired column sequence
+long_format <- long_format %>%
+  select(
+      '0_IDF',
+      '1_ID',
+      '1.1_CaseID',
+      '2_Author',
+      '3_Year',
+      'interval',
+      'timepoints',
+      '10_Size',
+      
+      '38_WBmt1', '39_WBsdt1', '40_WBmt2', '41_WBsdt2', '45_WBt1t2', '46_WBcort1t2',
+      '51_WBmt3', '52_WBsdt3', '48_WBt2t3', '49_WBcort2t3',
+      '53_WBmt4', '54_WBsdt4', '58_WBt3t4', '59_WBcort3t4',
+      '64_WBmt5', '65_WBsdt5', '61_WBt4t5', '62_WBcort4t5',
+      '66_WBmt6', '67_WBsdt6', '71_WBt5t6', '72_WBcort5t6',
+      '77_WBmt7', '78_WBsdt7', '74_WBt6t7', '75_WBcort6t7',
+      '79_WBmt8', '80_WBsdt8', '84_WBt7t8', '85_WBcort7t8',
+      '90_WBmt9', '91_WBsdt9', '87_WBt8t9', '88_WBcort8t9',
+      '92_WBmt10', '93_WBsdt10', '97_WBt9t10', '98_WBcort9t10',
+      '103_WBmt11', '104_WBsdt11', '100_WBt10t11', '101_WBcort10t11',
+      '105_WBmt12', '106_WBsdt12', '110_WBt11t12', '111_WBcort11t12',
+    )
+
+```
+
+
+```{r merge mean and SD as i and j for each Id}
+
+# Extract and Merge Interval Columns
+
+# Define relevant columns
+static_cols <- c("1_ID", "1.1_CaseID", "2_Author", "3_Year", "interval", "timepoints", "10_Size")
+
+# Create list to store output rows
+merged_rows <- list()
+
+# Loop through rows in long_format
+for (i in 1:nrow(long_format)) {
+  row <- long_format[i, ]
+
+  # Extract interval and parse i-j
+  interval <- row$interval
+  split <- str_split(interval, "-")[[1]]
+  i_tp <- as.integer(split[1])
+  j_tp <- as.integer(split[2])
+
+  # Construct column names based on interval values
+  WBmi_col <- grep(paste0("_WBmt", i_tp, "$"), names(row), value = TRUE)
+  WBsdi_col <- grep(paste0("_WBsdt", i_tp, "$"), names(row), value = TRUE)
+  WBmj_col <- grep(paste0("_WBmt", j_tp, "$"), names(row), value = TRUE)
+  WBsdj_col <- grep(paste0("_WBsdt", j_tp, "$"), names(row), value = TRUE)
+  WBcorr_col <- grep(paste0("_WBcort", i_tp, "t", j_tp, "$"), names(row), value = TRUE)
+  WBt_col <- grep(paste0("_WBt", i_tp, "t", j_tp, "$"), names(row), value = TRUE)
+
+  # Create compact row
+  merged <- row[static_cols]
+  merged$WBmi <- if (length(WBmi_col)) row[[WBmi_col]] else NA
+  merged$WBsdi <- if (length(WBsdi_col)) row[[WBsdi_col]] else NA
+  merged$WBmj <- if (length(WBmj_col)) row[[WBmj_col]] else NA
+  merged$WBsdj <- if (length(WBsdj_col)) row[[WBsdj_col]] else NA
+  merged$WBcorrij <- if (length(WBcorr_col)) row[[WBcorr_col]] else NA
+  merged$WBtitj <- if (length(WBt_col)) row[[WBt_col]] else NA
+
+  merged_rows[[length(merged_rows) + 1]] <- merged
+}
+
+# Combine all into final merged format
+long_format_merged <- bind_rows(merged_rows)
+
+# Preview the first few rows
+head(long_format_merged)
+```
+
+
+```{r Saving Output}
+# Write Final Output to Excel (unstyled)
+write.xlsx(long_format_merged, "output/long_format_with_seq_corr.xlsx", rowNames = FALSE)
+cat("Final long-format Excel written successfully with original column names intact.")
+
+```
+
+
+```{r Apply Interval-based Row Coloring and Export Output }
+
+# Create workbook and worksheet
+wb <- createWorkbook()
+addWorksheet(wb, "Long Format")
+
+# Write data to the worksheet with bold headers
+writeData(wb, "Long Format", long_format, startRow = 1, headerStyle = createStyle(textDecoration = "bold"))
+
+# Define color palette and interval labels
+interval_list <- paste0(1:11, "-", 2:12)
+color_palette <- c(
+  "#D9EAF7", "#E8F5E9", "#FFF9C4", "#FFEBEE", "#F3E5F5", "#E0F2F1",
+  "#FBE9E7", "#F1F8E9", "#EDE7F6", "#FFECB3", "#ECEFF1"
+)
+
+# Apply background color based on interval
+for (i in seq_along(interval_list)) {
+  intv <- interval_list[i]
+  color <- color_palette[i]
+  style <- createStyle(fgFill = color)
+
+  rows_to_style <- which(long_format_merged$interval == intv) + 1  # +1 for header row
+  if (length(rows_to_style) > 0) {
+    addStyle(
+      wb, sheet = "Long Format", style = style,
+      rows = rows_to_style, cols = 1:ncol(long_format_merged),
+      gridExpand = TRUE
+    )
+  }
+}
+
+# Save the styled workbook
+saveWorkbook(wb, "output/long_format_with_seq_corr_color.xlsx", overwrite = TRUE)
+cat("Excel file saved with unique row colors for each interval.\n")
+
+
+```

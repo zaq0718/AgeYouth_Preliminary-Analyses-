@@ -1,0 +1,86 @@
+---
+title: "Converting Agewell Codesheet to Long Format with WBmt Only"
+output: html_notebook
+---
+
+```{r setup, include=TRUE}
+# =============================
+# Load Libraries and Read Data
+# =============================
+library(openxlsx)
+library(dplyr)
+library(tidyr)
+library(stringr)
+
+# Define file paths
+file_path <- "data/included_studies_1-13.xlsx" 
+# Read Excel data starting from row 2 (headers start here)
+data <- read.xlsx(file_path)
+
+# Clean column names to remove unwanted characters and whitespace
+clean_names <- function(x) {
+  x <- gsub('["]', "", x)
+  x <- gsub("&#10;?", "", x)
+  x <- gsub("[\r\n]", "", x)
+  x <- trimws(x)
+  x <- gsub("\\s+", "", x)
+  return(x)
+}
+names(data) <- clean_names(names(data))
+```
+
+```{r merge-interval-columns}
+# ================================
+# Extract and Merge Interval Columns
+# ================================
+
+# Define relevant columns
+static_cols <- c("1_ID", "1.1_CaseID", "2_Author", "3_Year", "interval", "timepoints")
+
+# Create list to store output rows
+merged_rows <- list()
+
+# Loop through rows in long_format
+for (i in 1:nrow(long_format)) {
+  row <- long_format[i, ]
+
+  # Extract interval and parse i-j
+  interval <- row$interval
+  split <- str_split(interval, "-")[[1]]
+  i_tp <- as.integer(split[1])
+  j_tp <- as.integer(split[2])
+
+  # Construct column names based on interval values
+  WBmi_col <- grep(paste0("_WBmt", i_tp, "$"), names(row), value = TRUE)
+  WBsdi_col <- grep(paste0("_WBsdt", i_tp, "$"), names(row), value = TRUE)
+  WBmj_col <- grep(paste0("_WBmt", j_tp, "$"), names(row), value = TRUE)
+  WBsdj_col <- grep(paste0("_WBsdt", j_tp, "$"), names(row), value = TRUE)
+  WBcorr_col <- grep(paste0("_WBcort", i_tp, "t", j_tp, "$"), names(row), value = TRUE)
+  WBt_col <- grep(paste0("_WBt", i_tp, "t", j_tp, "$"), names(row), value = TRUE)
+
+  # Create compact row
+  merged <- row[static_cols]
+  merged$WBmi <- if (length(WBmi_col)) row[[WBmi_col]] else NA
+  merged$WBsdi <- if (length(WBsdi_col)) row[[WBsdi_col]] else NA
+  merged$WBmj <- if (length(WBmj_col)) row[[WBmj_col]] else NA
+  merged$WBsdj <- if (length(WBsdj_col)) row[[WBsdj_col]] else NA
+  merged$WBcorrij <- if (length(WBcorr_col)) row[[WBcorr_col]] else NA
+  merged$WBtitj <- if (length(WBt_col)) row[[WBt_col]] else NA
+
+  merged_rows[[length(merged_rows) + 1]] <- merged
+}
+
+# Combine all into final merged format
+long_format_merged <- bind_rows(merged_rows)
+
+# Preview the first few rows
+head(long_format_merged)
+```
+
+```{r export-merged}
+# ================================
+# Export Merged DataFrame to Excel
+# ================================
+write.xlsx(long_format_merged, file = "C:/Users/Prerana/Desktop/long_format_merged_output.xlsx", rowNames = FALSE)
+cat("\u2705 Merged long format file exported successfully.\n")
+```

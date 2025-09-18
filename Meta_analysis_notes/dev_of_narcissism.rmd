@@ -1,0 +1,1537 @@
+---
+title: "Meta-Analysis on Development of Narcissism"
+---
+
+```{r load packages}
+library(readxl)             # Loads package for reading Excel files
+library(metafor)            # Loads metafor package for conducting meta-analyses
+library(psych)              # Loads psych package for descriptive statistics and psychometrics
+library(ggplot2)            # Loads ggplot2 for creating visualizations
+library(patchwork)          # Loads patchwork to combine multiple ggplots into one
+
+theme_update(              # Updates global ggplot2 theme settings
+  plot.title = element_text(hjust = 0.5),            # Center-aligns plot titles
+  axis.text.x = element_text(color="black"),        # Sets x-axis text color to black
+  axis.text.y = element_text(color="black")         # Sets y-axis text color to black
+)
+
+```
+
+```{r data transformation}
+dat <- read_xlsx("Development of narcissism - Data.xlsx")  # Loads the dataset from Excel
+
+head(dat)
+```
+
+```{r convert data type}
+dat$artid <- as.factor(dat$artid)            # Converts article ID to factor (categorical)
+dat$author <- as.factor(dat$author)          # Converts author name to factor
+dat$pubyear <- as.numeric(dat$pubyear)       # Converts publication year to numeric
+dat$pubtype <- as.factor(dat$pubtype)        # Converts publication type to factor
+dat$inclusion <- as.factor(dat$inclusion)    # Converts inclusion status to factor
+dat$exclreas <- as.factor(dat$exclreas)      # Converts exclusion reason to factor
+dat$sampid <- as.factor(dat$sampid)          # Converts sample ID to factor
+dat$sampname <- as.factor(dat$sampname)      # Converts sample name to factor
+dat$samptype <- as.factor(dat$samptype)      # Converts sample type to factor
+dat$studyname <- as.factor(dat$studyname)    # Converts study name to factor
+dat$otherref <- as.factor(dat$otherref)      # Converts other reference to factor
+dat$n <- as.numeric(dat$n)                   # Converts sample size to numeric
+dat$country <- as.factor(dat$country)        # Converts country to factor
+dat$female <- as.numeric(dat$female)         # Converts percent female to numeric
+dat$ethn <- as.factor(dat$ethn)              # Converts ethnicity to factor
+dat$measure <- as.factor(dat$measure)        # Converts measure used to factor
+dat$outcome <- as.factor(dat$outcome)        # Converts outcome variable to factor
+dat$outcome2 <- as.factor(dat$outcome2)      # Converts secondary outcome variable to factor
+dat$factor <- as.factor(dat$factor)          # Converts first personality factor to factor
+dat$factor2 <- as.factor(dat$factor2)        # Converts second personality factor to factor
+dat$reverse <- as.factor(dat$reverse)        # Converts reverse-coded variable indicator to factor
+dat$meastype <- as.factor(dat$meastype)      # Converts measure type to factor
+dat$rel <- as.numeric(dat$rel)               # Converts reliability to numeric
+dat$t1year <- as.numeric(dat$t1year)         # Converts time 1 year to numeric
+dat$agem1 <- as.numeric(dat$agem1)           # Converts mean age at time 1 to numeric
+dat$agesd1 <- as.numeric(dat$agesd1)         # Converts SD of age at time 1 to numeric
+dat$interval <- as.factor(dat$interval)      # Converts time interval to factor
+dat$agem1i <- as.numeric(dat$agem1i)         # Converts interpolated mean age at T1 to numeric
+dat$outm1 <- as.numeric(dat$outm1)           # Converts outcome mean at T1 to numeric
+dat$outsd1 <- as.numeric(dat$outsd1)         # Converts outcome SD at T1 to numeric
+dat$outm2 <- as.numeric(dat$outm2)           # Converts outcome mean at T2 to numeric
+dat$outsd2 <- as.numeric(dat$outsd2)         # Converts outcome SD at T2 to numeric
+dat$timelag <- as.numeric(dat$timelag)       # Converts time lag (T2 - T1) to numeric
+dat$corr <- as.numeric(dat$corr)             # Converts test-retest correlation to numeric
+dat$pubstatus <- as.factor(dat$pubstatus)    # Converts publication status to factor
+
+```
+
+```{r create additional computed variables}
+dat$caseid <- 1:nrow(dat)  
+# Assigns a unique ID to each case/row in the dataset
+
+head(dat)
+
+```
+
+```{r}
+dat$clinical <- factor(ifelse((dat$samptype=="1"|dat$samptype=="2"|dat$samptype=="5"), "no", "yes"))  
+# Creates a new factor variable to flag clinical vs. non-clinical samples
+# Samples with type 1, 2, or 5 are considered non-clinical
+
+```
+
+```{r}
+dat <- transform(dat, yob = t1year - agem1)  
+# Computes year of birth as year at time 1 minus age at time 1
+
+dat <- transform(dat, agem1ic1 = (agem1i - 23.13) / 10)  
+# Centers and scales interpolated mean age at T1 (e.g., for meta-regression)
+
+dat <- transform(dat, agem1ic2 = agem1ic1^2)  
+# Square of the centered-scaled age term (for quadratic effects)
+
+dat <- transform(dat, agem1ic3 = agem1ic1^3)  
+# Cube of the centered-scaled age term (for cubic effects)
+
+dat <- transform(dat, timelagc = timelag - 11.42)  
+# Centers time lag (used in moderation analyses)
+
+dat <- transform(dat, agem2i = agem1i + timelag)  
+# Estimates age at time 2 as interpolated age at T1 + time lag
+
+dat <- transform(dat, female = female / 100)  
+# Converts percent female to proportion (0 to 1 scale)
+
+dat
+```
+
+```{r Computation of Effect Sizes of Mean-Level Change}
+dat$corrmean <- mean(dat$corr, na.rm = TRUE)  
+# Calculates the mean of the test-retest correlations, excluding NAs
+
+dat$corrx <- ifelse(is.na(dat$corr), dat$corrmean, dat$corr)  
+# Fills in missing correlations with the average (only for mean-level change analysis)
+
+dat <- transform(dat, es_d = (outm2 - outm1) / outsd1)  
+# Calculates Cohen's d for change between T1 and T2, using SD at T1
+
+dat <- transform(dat, es_dyear = es_d / timelag)  
+# Divides d by time lag to get annualized effect size
+
+dat <- transform(dat, v_d = ((2 * (1 - corrx) / n) + (es_d * es_d / (2 * n))))  
+# Variance of d based on sample size and estimated correlation (formula from meta-analysis literature)
+
+dat <- transform(dat, v_dyear = v_d / (timelag^2))  
+# Annualized variance of d
+
+dat
+```
+
+```{r Computation of Effect Sizes of Rank-Order Stability: for later}
+dat$corrdis <- dat$corr / dat$rel  
+# Computes disattenuated correlation (adjusted for reliability)
+
+dat$corrdis <- ifelse(dat$corrdis >= 0.99, 0.99, dat$corrdis)  
+# Caps very high values of disattenuated correlation at 0.99 to prevent distortion
+
+dat$corrdis_z <- fisherz(dat$corrdis)  
+# Applies Fisher z-transformation to disattenuated correlation
+
+dat$v_corr <- (1 / (dat$n - 3))  
+# Sampling variance for Fisher’s z (standard formula)
+
+dat$v_corrdis <- dat$v_corr / (dat$rel * dat$rel)  
+# Adjusts variance for the reliability of the measure
+
+```
+
+```{r Subsamples}
+dat.artid <- dat[!duplicated(dat$artid),]
+# Subsample with one row per article (removes duplicates based on article ID)
+
+dat.sample <- dat[!duplicated(dat$sampid),]
+# Subsample with one row per sample (removes duplicates based on sample ID)
+
+```
+
+```{r Subsets by Personality Factor – Level 1 (factor)}
+dat.agentic <- subset(dat, subset = factor == "Agentic")
+# Subsets data for the Agentic factor
+
+dat.antagonistic <- subset(dat, subset = factor == "Antagonistic")
+# Subsets data for the Antagonistic factor
+
+dat.neurotic <- subset(dat, subset = factor == "Neurotic")
+# Subsets data for the Neurotic factor
+
+```
+
+```{r Keep only rows with non-missing yearly d (change effect size)}
+dat.agentic.es_dyear <- subset(dat.agentic, subset = es_dyear != "NA")
+# Removes NA values of es_dyear from Agentic subset
+
+dat.antagonistic.es_dyear <- subset(dat.antagonistic, subset = es_dyear != "NA")
+# Removes NA values from Antagonistic subset
+
+dat.neurotic.es_dyear <- subset(dat.neurotic, subset = es_dyear != "NA")
+# Removes NA values from Neurotic subset
+
+```
+
+```{r One row per sample (non-duplicated) from each factor × ES subset}
+dat.agentic.es_dyear.sample <- dat.agentic.es_dyear[!duplicated(dat.agentic.es_dyear$sampid),]
+# Non-duplicated samples for Agentic effect size analysis
+
+dat.antagonistic.es_dyear.sample <- dat.antagonistic.es_dyear[!duplicated(dat.antagonistic.es_dyear$sampid),]
+# Non-duplicated samples for Antagonistic effect size analysis
+
+dat.neurotic.es_dyear.sample <- dat.neurotic.es_dyear[!duplicated(dat.neurotic.es_dyear$sampid),]
+# Non-duplicated samples for Neurotic effect size analysis
+
+```
+
+```{r Non-clinical only subsets}
+dat.agentic.nonclin <- subset(dat.agentic, subset = clinical == "no")
+# Agentic factor, non-clinical samples only
+
+dat.antagonistic.nonclin <- subset(dat.antagonistic, subset = clinical == "no")
+# Antagonistic factor, non-clinical samples only
+
+dat.neurotic.nonclin <- subset(dat.neurotic, subset = clinical == "no")
+# Neurotic factor, non-clinical samples only
+
+```
+
+```{r With non-missing yearly d among non-clinical samples}
+dat.agentic.nonclin.es_dyear <- subset(dat.agentic.nonclin, subset = es_dyear != "NA")
+# Removes NA es_dyear from Agentic non-clinical
+
+dat.antagonistic.nonclin.es_dyear <- subset(dat.antagonistic.nonclin, subset = es_dyear != "NA")
+# Same for Antagonistic
+
+dat.neurotic.nonclin.es_dyear <- subset(dat.neurotic.nonclin, subset = es_dyear != "NA")
+# Same for Neurotic
+
+```
+
+```{r One row per sample from nonclinical ES subset}
+dat.agentic.nonclin.es_dyear.sample <- dat.agentic.nonclin.es_dyear[!duplicated(dat.agentic.nonclin.es_dyear$sampid),]
+
+dat.antagonistic.nonclin.es_dyear.sample <- dat.antagonistic.nonclin.es_dyear[!duplicated(dat.antagonistic.nonclin.es_dyear$sampid),]
+
+dat.neurotic.nonclin.es_dyear.sample <- dat.neurotic.nonclin.es_dyear[!duplicated(dat.neurotic.nonclin.es_dyear$sampid),]
+
+```
+
+```{r All non-clinical and non-missing ES}
+dat.nonclin <- subset(dat, subset = clinical == "no")
+# Full dataset filtered to non-clinical samples
+
+dat.nonclin.es_dyear <- subset(dat.nonclin, subset = es_dyear != "NA")
+# Removes NA es_dyear from nonclinical dataset
+
+```
+
+
+
+```{r Subsets by Factor2 (second-order categorization)}
+dat.agentic2 <- subset(dat, subset = factor2 == "Agentic")
+dat.antagonistic2 <- subset(dat, subset = factor2 == "Antagonistic")
+dat.neurotic2 <- subset(dat, subset = factor2 == "Neurotic")
+# Repeats filtering logic above using secondary factor variable
+
+
+dat.agentic2.es_dyear <- subset(dat.agentic2, subset = es_dyear != "NA")
+dat.antagonistic2.es_dyear <- subset(dat.antagonistic2, subset = es_dyear != "NA")
+dat.neurotic2.es_dyear <- subset(dat.neurotic2, subset = es_dyear != "NA")
+
+
+dat.agentic2.es_dyear.sample <- dat.agentic2.es_dyear[!duplicated(dat.agentic2.es_dyear$sampid),]
+dat.antagonistic2.es_dyear.sample <- dat.antagonistic2.es_dyear[!duplicated(dat.antagonistic2.es_dyear$sampid),]
+dat.neurotic2.es_dyear.sample <- dat.neurotic2.es_dyear[!duplicated(dat.neurotic2.es_dyear$sampid),]
+
+
+dat.agentic2.nonclin <- subset(dat.agentic2, subset = clinical == "no")
+dat.antagonistic2.nonclin <- subset(dat.antagonistic2, subset = clinical == "no")
+dat.neurotic2.nonclin <- subset(dat.neurotic2, subset = clinical == "no")
+
+
+dat.agentic2.nonclin.es_dyear <- subset(dat.agentic2.nonclin, subset = es_dyear != "NA")
+dat.antagonistic2.nonclin.es_dyear <- subset(dat.antagonistic2.nonclin, subset = es_dyear != "NA")
+dat.neurotic2.nonclin.es_dyear <- subset(dat.neurotic2.nonclin, subset = es_dyear != "NA")
+
+dat.agentic2.nonclin.es_dyear.sample <- dat.agentic2.nonclin.es_dyear[!duplicated(dat.agentic2.nonclin.es_dyear$sampid),]
+dat.antagonistic2.nonclin.es_dyear.sample <- dat.antagonistic2.nonclin.es_dyear[!duplicated(dat.antagonistic2.nonclin.es_dyear$sampid),]
+dat.neurotic2.nonclin.es_dyear.sample <- dat.neurotic2.nonclin.es_dyear[!duplicated(dat.neurotic2.nonclin.es_dyear$sampid),]
+
+```
+
+```{r Correlation-based subsamples}
+dat.agentic.corr <- subset(dat.agentic, subset = corr != "NA")
+dat.antagonistic.corr <- subset(dat.antagonistic, subset = corr != "NA")
+dat.neurotic.corr <- subset(dat.neurotic, subset = corr != "NA")
+
+
+dat.agentic.corr.sample <- dat.agentic.corr[!duplicated(dat.agentic.corr$sampid),]
+dat.antagonistic.corr.sample <- dat.antagonistic.corr[!duplicated(dat.antagonistic.corr$sampid),]
+dat.neurotic.corr.sample <- dat.neurotic.corr[!duplicated(dat.neurotic.corr$sampid),]
+
+
+dat.agentic2.corr <- subset(dat.agentic2, subset = corr != "NA")
+dat.antagonistic2.corr <- subset(dat.antagonistic2, subset = corr != "NA")
+dat.neurotic2.corr <- subset(dat.neurotic2, subset = corr != "NA")
+
+
+dat.agentic2.corr.sample <- dat.agentic2.corr[!duplicated(dat.agentic2.corr$sampid),]
+dat.antagonistic2.corr.sample <- dat.antagonistic2.corr[!duplicated(dat.antagonistic2.corr$sampid),]
+dat.neurotic2.corr.sample <- dat.neurotic2.corr[!duplicated(dat.neurotic2.corr$sampid),]
+
+```
+
+```{r Sample Characteristics}
+min(dat.sample$n)  
+# Minimum sample size across all samples
+
+max(dat.sample$n)  
+# Maximum sample size across all samples
+
+mean(dat.sample$n)  
+# Mean (average) sample size
+
+sd(dat.sample$n)  
+# Standard deviation of sample size
+
+median(dat.sample$n)  
+# Median sample size
+
+sum(dat.sample$n)  
+# Total number of participants across all samples
+
+```
+
+```{r Frequencies for Sample Type}
+table(dat.sample$samptype)  
+# Frequency count of each sample type (e.g., clinical vs. non-clinical codes)
+
+```
+
+```{r Female Proportion Descriptive Stats}
+mean(dat.sample$female, na.rm = TRUE)  
+# Mean proportion of females across samples (NA values ignored)
+
+min(dat.sample$female, na.rm = TRUE)  
+# Minimum proportion of females
+
+max(dat.sample$female, na.rm = TRUE)  
+# Maximum proportion of females
+
+sd(dat.sample$female, na.rm = TRUE)  
+# Standard deviation of female proportion
+
+median(dat.sample$female, na.rm = TRUE)  
+# Median proportion of females
+
+```
+
+```{r Country and Ethnicity Counts}
+table(dat.sample$country)  
+# Frequency table of countries represented in the sample
+
+table(dat.sample$ethn)  
+# Frequency table of reported ethnicities
+
+```
+
+```{r Age Descriptives at Time 1}
+min(dat.sample$agem1)  
+# Minimum mean age at time 1
+
+max(dat.sample$agem1)  
+# Maximum mean age at time 1
+
+mean(dat.sample$agem1)  
+# Mean age at time 1
+
+sd(dat.sample$agem1)  
+# Standard deviation of mean age at time 1
+
+```
+
+```{r Maximum Interpolated Ages}
+max(dat$agem1i)  
+# Maximum interpolated age at time 1
+
+max(dat$agem2i)  
+# Maximum interpolated age at time 2
+
+```
+
+```{r Year of First Measurement (T1)}
+min(dat.sample$t1year)  
+# Earliest year of data collection (T1)
+
+max(dat.sample$t1year)  
+# Latest year of data collection (T1)
+
+mean(dat.sample$t1year)  
+# Mean year of data collection (T1)
+
+sd(dat.sample$t1year)  
+# Standard deviation of year of data collection (T1)
+
+```
+
+```{r Year of Birth Descriptives}
+min(dat.sample$yob)  
+# Minimum year of birth
+
+max(dat.sample$yob)  
+# Maximum year of birth
+
+mean(dat.sample$yob)  
+# Mean year of birth
+
+sd(dat.sample$yob)  
+# Standard deviation of year of birth
+
+```
+
+```{r Descriptive Statistics for Time Lag}
+describe(dat$timelag, skew=TRUE)  
+# Produces detailed descriptive stats for time lag, including skewness (via `psych::describe`)
+```
+
+```{r MEAN-LEVEL CHANGE}
+# Effect Size Analyses
+res <- rma.mv(yi=es_dyear, V=v_dyear, random = ~ 1 | sampid/caseid, data=dat.agentic)
+# Fits a multilevel random-effects model for Agentic factor
+#   - yi: annualized effect size (d per year)
+#   - V: corresponding variance
+#   - random effects: nested structure (caseid within sampid)
+
+print(res, digits=3)
+# Prints model results with 3 decimal places
+
+sum(dat.agentic.es_dyear.sample$n)
+# Total number of participants used in Agentic effect size analysis (sample-level)
+
+res <- rma.mv(yi=es_dyear, V=v_dyear, random = ~ 1 | sampid/caseid, data=dat.antagonistic)
+# Same as above, but for Antagonistic factor
+
+print(res, digits=3)
+# Outputs model results
+
+sum(dat.antagonistic.es_dyear.sample$n)
+# Total participants in Antagonistic group
+
+```
+
+```{r}
+res <- rma.mv(yi=es_dyear, V=v_dyear, random = ~ 1 | sampid/caseid, data=dat.neurotic)
+# Model for Neurotic factor
+
+print(res, digits=3)
+# Display Neurotic model output
+
+sum(dat.neurotic.es_dyear.sample$n)
+# Total sample size for Neurotic analyses
+
+```
+
+
+```{r Age Effects: Modeling the effect of age on yearly change}
+res <- rma.mv(yi=es_dyear, V=v_dyear, random = ~ 1 | sampid/caseid,
+               data=dat.agentic, mods = cbind(agem1ic1))
+# Agentic: meta-regression with linear effect of age (centered and scaled)
+
+print(res, digits=4)
+# Print results with 4 decimal places
+
+res <- rma.mv(yi=es_dyear, V=v_dyear, random = ~ 1 | sampid/caseid,
+               data=dat.agentic, mods = cbind(agem1ic1, agem1ic2))
+# Agentic: includes both linear and quadratic age terms
+
+print(res, digits=4)
+# Display results
+
+res <- rma.mv(yi=es_dyear, V=v_dyear, random = ~ 1 | sampid/caseid,
+               data=dat.agentic, mods = cbind(agem1ic1, agem1ic2, agem1ic3))
+# Agentic: adds cubic age term
+
+print(res, digits=4)
+# Output for 3rd-order polynomial model
+
+```
+
+```{r Repeat above meta-regressions for Antagonistic factors:}
+res <- rma.mv(yi=es_dyear, V=v_dyear, random = ~ 1 | sampid/caseid,
+               data=dat.antagonistic, mods = cbind(agem1ic1))
+
+print(res, digits=4)
+
+res <- rma.mv(yi=es_dyear, V=v_dyear, random = ~ 1 | sampid/caseid,
+               data=dat.antagonistic, mods = cbind(agem1ic1, agem1ic2))
+
+print(res, digits=4)
+
+res <- rma.mv(yi=es_dyear, V=v_dyear, random = ~ 1 | sampid/caseid,
+               data=dat.antagonistic, mods = cbind(agem1ic1, agem1ic2, agem1ic3))
+
+print(res, digits=4)
+
+```
+
+```{r Repeat above meta-regressions for Neurotic factors}
+res <- rma.mv(yi=es_dyear, V=v_dyear, random = ~ 1 | sampid/caseid,
+               data=dat.neurotic, mods = cbind(agem1ic1))
+
+print(res, digits=4)
+
+res <- rma.mv(yi=es_dyear, V=v_dyear, random = ~ 1 | sampid/caseid,
+               data=dat.neurotic, mods = cbind(agem1ic1, agem1ic2))
+
+print(res, digits=4)
+
+res <- rma.mv(yi=es_dyear, V=v_dyear, random = ~ 1 | sampid/caseid,
+               data=dat.neurotic, mods = cbind(agem1ic1, agem1ic2, agem1ic3))
+
+print(res, digits=4)
+
+```
+
+```{r Moderator Analyses}
+# Here, the script explores whether gender, cohort (birth year), or clinical status explain variability in mean-level change.
+
+dat.sample$clinicalnum <- as.numeric(dat.sample$clinicalnum <- dat.sample$clinical)
+# Converts 'clinical' factor into a numeric variable for correlation testing
+# (likely "no" = 1, "yes" = 2, depending on factor level order)
+
+cor.test(dat.sample$female, dat.sample$yob)
+# Correlation test between % female and year of birth (cohort effect)
+
+cor.test(dat.sample$female, dat.sample$clinicalnum)
+# Correlation test between % female and clinical status
+
+cor.test(dat.sample$yob, dat.sample$clinicalnum)
+# Correlation test between year of birth and clinical status
+
+```
+
+```{r Multivariate Moderator Models for Mean-Level Change}
+res <- rma.mv(yi=es_dyear, V=v_dyear,
+              random = ~ 1 | sampid/caseid,
+              data=dat.agentic, mods = cbind(female, yob, clinical))
+# Agentic: meta-regression with gender, cohort, and clinical status as moderators
+
+print(res, digits=4)
+# Show results
+
+res <- rma.mv(yi=es_dyear, V=v_dyear,
+              random = ~ 1 | sampid/caseid,
+              data=dat.antagonistic, mods = cbind(female, yob, clinical))
+# Antagonistic: same moderator model
+
+print(res, digits=4)
+
+res <- rma.mv(yi=es_dyear, V=v_dyear,
+              random = ~ 1 | sampid/caseid,
+              data=dat.neurotic, mods = cbind(female, yob, clinical))
+# Neurotic: same moderator model
+
+print(res, digits=4)
+
+```
+
+```{r Effect Size Analyses  Nonclinical Samples Only}
+res <- rma.mv(yi=es_dyear, V=v_dyear,
+              random = ~ 1 | sampid/caseid,
+              data=dat.agentic.nonclin)
+# Agentic: model for non-clinical subsample only
+
+print(res, digits=3)
+# Show summary
+
+sum(dat.agentic.nonclin.es_dyear.sample$n)
+# Sum of participants in non-clinical Agentic analysis
+
+```
+
+```{r}
+res <- rma.mv(yi=es_dyear, V=v_dyear,
+              random = ~ 1 | sampid/caseid,
+              data=dat.antagonistic.nonclin)
+# Antagonistic: non-clinical only
+
+print(res, digits=3)
+
+sum(dat.antagonistic.nonclin.es_dyear.sample$n)
+# Total sample size
+
+```
+
+```{r}
+res <- rma.mv(yi=es_dyear, V=v_dyear,
+              random = ~ 1 | sampid/caseid,
+              data=dat.neurotic.nonclin)
+# Neurotic: non-clinical only
+
+print(res, digits=3)
+
+sum(dat.neurotic.nonclin.es_dyear.sample$n)
+# Total sample size
+
+```
+
+```{r}
+min(dat.nonclin.es_dyear$agem1i)
+# Minimum interpolated age at time 1 among non-clinical samples
+
+max(dat.nonclin.es_dyear$agem2i)
+# Maximum interpolated age at time 2 among non-clinical samples
+
+```
+```{r}
+summary(dat)
+```
+
+```{r Visualization: Hypothetical Linear Slopes for Each Trait}
+dat.mlchange <- data.frame(x = c(8, 77))
+# Creates a minimal data frame with age range from 8 to 77 to use as x-axis base
+
+
+ggplot(dat.mlchange, aes(x, y)) +
+  labs(x = "Age", y = "Cumulative d value") +
+# Initializes a ggplot with x from 8 to 77 and placeholder y
+# Labels axes accordingly
+
+  
+  scale_x_continuous(breaks = seq(10, 70, 10), lim = c(8, 77), expand = c(0,0)) +
+# Sets x-axis breaks every 10 years, limits from 8 to 77 with no margin padding
+
+  
+    scale_y_continuous(breaks = seq(-0.8, 0.2, 0.2), lim = c(-0.8, 0.2), expand = c(0,0)) +
+# Sets y-axis breaks and limits for cumulative d-values from -0.8 to 0.2
+
+  
+    geom_hline(yintercept=0, linetype="dashed", color = "black", linewidth = 1) +
+# Adds a dashed horizontal reference line at y = 0
+
+    geom_abline(intercept= -0.004*-8, slope = -0.004, linetype="solid", color = "black", linewidth = 1) +
+# Adds Agentic trend line with a slope of -0.004 and adjusts intercept to start at age 8
+
+    geom_abline(intercept= -0.006*-8, slope = -0.006, linetype="solid", color = "black", linewidth = 1) +
+# Adds Antagonistic trend line with a steeper negative slope
+
+    geom_abline(intercept= -0.008*-8, slope = -0.008, linetype="solid", color = "black", linewidth = 1) +
+# Adds Neurotic trend line with the steepest slope
+
+    theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.line = element_line(colour = "black")) +
+# Cleans up the plot appearance: removes gridlines, background, and keeps axis lines
+
+    annotate("text", x=70, y=-0.2, label="Agentic") +
+  annotate("text", x=69, y=-0.3, label="Antagonistic") +
+  annotate("text", x=66, y=-0.4, label="Neurotic")
+# Adds text annotations labeling each trajectory at different y-values
+
+ggsave(file="fig1.eps", width=5, height=3.75)
+# Saves the plot as an EPS file with specified dimensions
+
+```
+
+```{r Effect Size Analyses (Clinical Samples Only)}
+# These lines perform the same multilevel meta-analyses as before, but now restricted to participants from clinical populations.
+
+dat.agentic.clin <- subset(dat.agentic, subset = clinical == "yes")
+# Subset of Agentic records from clinical samples only
+
+dat.antagonistic.clin <- subset(dat.antagonistic, subset = clinical == "yes")
+# Subset of Antagonistic records from clinical samples only
+
+dat.neurotic.clin <- subset(dat.neurotic, subset = clinical == "yes")
+# Subset of Neurotic records from clinical samples only
+
+```
+
+```{r Keep only non-missing yearly effect sizes}
+dat.agentic.clin.es_dyear <- subset(dat.agentic.clin, subset = es_dyear != "NA")
+# Removes rows with missing es_dyear from Agentic clinical sample
+
+dat.antagonistic.clin.es_dyear <- subset(dat.antagonistic.clin, subset = es_dyear != "NA")
+# Same filtering for Antagonistic clinical subset
+
+dat.neurotic.clin.es_dyear <- subset(dat.neurotic.clin, subset = es_dyear != "NA")
+# Same filtering for Neurotic clinical subset
+
+```
+
+```{r Keep only one entry per sample}
+dat.agentic.clin.es_dyear.sample <- dat.agentic.clin.es_dyear[!duplicated(dat.agentic.clin.es_dyear$sampid),]
+# Deduplicates samples within Agentic clinical subset
+
+dat.antagonistic.clin.es_dyear.sample <- dat.antagonistic.clin.es_dyear[!duplicated(dat.antagonistic.clin.es_dyear$sampid),]
+# Same for Antagonistic
+
+dat.neurotic.clin.es_dyear.sample <- dat.neurotic.clin.es_dyear[!duplicated(dat.neurotic.clin.es_dyear$sampid),]
+# Same for Neurotic
+
+```
+
+
+```{r Meta-analyses on Clinical Samples}
+res <- rma.mv(yi=es_dyear, V=v_dyear, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.agentic.clin)
+# Meta-analysis of Agentic mean-level change in clinical samples
+
+print(res, digits=3)
+# Display results with 3 decimal precision
+
+sum(dat.agentic.clin.es_dyear.sample$n)
+# Reports the total number of individuals in clinical Agentic samples
+
+res <- rma.mv(yi=es_dyear, V=v_dyear, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.antagonistic.clin)
+# Meta-analysis of Antagonistic trait change in clinical samples
+
+print(res, digits=3)
+# Outputs results
+
+sum(dat.antagonistic.clin.es_dyear.sample$n)
+# Total sample size for Antagonistic clinical subset
+
+res <- rma.mv(yi=es_dyear, V=v_dyear, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.neurotic.clin)
+# Meta-analysis for Neurotic trait in clinical samples
+
+print(res, digits=3)
+# Print model summary
+
+sum(dat.neurotic.clin.es_dyear.sample$n)
+# Total number of participants in Neurotic clinical subsample
+
+```
+
+```{r Replication of Effect Size Analyses with Reduced Set of Measures (factor2)}
+res <- rma.mv(yi=es_dyear, V=v_dyear, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.agentic2)
+# Multilevel meta-analysis for Agentic dimension using reduced factor coding (factor2)
+
+print(res, digits=3)
+# Print model results
+
+sum(dat.agentic2.es_dyear.sample$n)
+# Total number of participants included in the reduced Agentic analysis
+
+res <- rma.mv(yi=es_dyear, V=v_dyear, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.antagonistic2)
+# Meta-analysis for Antagonistic dimension using factor2
+
+print(res, digits=3)
+
+sum(dat.antagonistic2.es_dyear.sample$n)
+# Total participants in reduced Antagonistic subset
+
+
+res <- rma.mv(yi=es_dyear, V=v_dyear, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.neurotic2)
+# Meta-analysis for Neurotic dimension using factor2
+
+print(res, digits=3)
+
+sum(dat.neurotic2.es_dyear.sample$n)
+# Total participants in reduced Neurotic subset
+
+```
+
+```{r Nonclinical Subset Replication (Reduced Measures)}
+res <- rma.mv(yi=es_dyear, V=v_dyear, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.agentic2.nonclin)
+# Agentic, reduced factor coding, nonclinical only
+
+print(res, digits=3)
+
+sum(dat.agentic2.nonclin.es_dyear.sample$n)
+# Total participants in nonclinical reduced Agentic analysis
+
+res <- rma.mv(yi=es_dyear, V=v_dyear, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.antagonistic2.nonclin)
+# Antagonistic, reduced factor, nonclinical
+
+print(res, digits=3)
+
+sum(dat.antagonistic2.nonclin.es_dyear.sample$n)
+# Total sample size
+
+res <- rma.mv(yi=es_dyear, V=v_dyear, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.neurotic2.nonclin)
+# Neurotic, reduced factor, nonclinical
+
+print(res, digits=3)
+
+sum(dat.neurotic2.nonclin.es_dyear.sample$n)
+# Total number of participants
+
+```
+
+```{r Agentic – Publication Bias}
+res <- rma(yi=es_dyear, vi=v_dyear, data=dat.agentic)
+# Random-effects model using the simpler `rma()` (not multilevel) on Agentic data
+
+print(res, digits=3)
+# Show model output
+
+regtest(res)
+# Egger's regression test for funnel plot asymmetry (test of publication bias)
+
+res <- rma.mv(yi=es_dyear, V=v_dyear, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.agentic, mods = cbind(pubstatus))
+# Multilevel model including publication status (published/unpublished) as moderator
+
+print(res, digits=3)
+# Show model output
+
+table(dat.agentic.es_dyear$pubstatus)
+# Table of publication status counts for Agentic data
+
+```
+
+```{r Antagonistic  Publication Bias}
+res <- rma(yi=es_dyear, vi=v_dyear, data=dat.antagonistic)
+# Simple model for Antagonistic data
+
+print(res, digits=3)
+
+regtest(res)
+# Egger's test for Antagonistic
+
+res <- rma.mv(yi=es_dyear, V=v_dyear, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.antagonistic, mods = cbind(pubstatus))
+# Antagonistic model with pubstatus moderator
+
+print(res, digits=3)
+
+table(dat.antagonistic.es_dyear$pubstatus)
+# Count of published vs. unpublished studies
+
+```
+
+```{r Neurotic  Publication Bias}
+res <- rma(yi=es_dyear, vi=v_dyear, data=dat.neurotic)
+# Base model for Neurotic trait
+
+print(res, digits=3)
+
+regtest(res)
+# Egger's test for Neurotic
+
+res <- rma.mv(yi=es_dyear, V=v_dyear, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.neurotic, mods = cbind(pubstatus))
+# Multilevel model with publication status as moderator
+
+print(res, digits=3)
+
+table(dat.neurotic.es_dyear$pubstatus)
+# Frequency table of publication status
+
+```
+
+```{r Funnel Plots for Nonclinical Samples}
+par(mfrow = c(3, 1))
+# Set up 3 rows for plotting funnel plots (Agentic, Antagonistic, Neurotic)
+
+```
+
+```{r Agentic Funnel}
+res <- rma(yi=es_dyear, vi=v_dyear, data=dat.agentic.nonclin)
+# Simple model for Agentic (nonclinical only)
+
+print(res, digits=3)
+
+regtest(res)
+# Egger's test
+
+funnel(res, xlab="Effect Size (d per year)", ylab="Standard Error", main="Agentic Narcissism") +
+  mtext("A", side = 3, line = 2.4, adj = -0.16, cex = 1.0)
+# Plot funnel plot for Agentic with label "A"
+
+res <- rma.mv(yi=es_dyear, V=v_dyear, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.agentic.nonclin, mods = cbind(pubstatus))
+# Agentic nonclinical: multilevel model with publication status
+
+print(res, digits=3)
+
+table(dat.agentic.nonclin.es_dyear$pubstatus)
+# Table of publication status
+
+```
+
+```{r Antagonistic Funnel}
+res <- rma(yi=es_dyear, vi=v_dyear, data=dat.antagonistic.nonclin)
+
+print(res, digits=3)
+
+regtest(res)
+
+funnel(res, xlab="Effect Size (d per year)", ylab="Standard Error", main="Antagonistic Narcissism") +
+  mtext("B", side = 3, line = 2.4, adj = -0.16, cex = 1.0)
+# Funnel plot for Antagonistic, labeled "B"
+
+res <- rma.mv(yi=es_dyear, V=v_dyear, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.antagonistic.nonclin, mods = cbind(pubstatus))
+
+print(res, digits=3)
+
+table(dat.antagonistic.nonclin.es_dyear$pubstatus)
+
+```
+
+```{r Neurotic Funnel}
+res <- rma(yi=es_dyear, vi=v_dyear, data=dat.neurotic.nonclin)
+
+print(res, digits=3)
+
+regtest(res)
+
+funnel(res, xlab="Effect Size (d per year)", ylab="Standard Error", main="Neurotic Narcissism") +
+  mtext("C", side = 3, line = 2.4, adj = -0.16, cex = 1.0)
+# Funnel plot for Neurotic, labeled "C"
+
+res <- rma.mv(yi=es_dyear, V=v_dyear, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.neurotic.nonclin, mods = cbind(pubstatus))
+
+print(res, digits=3)
+
+table(dat.neurotic.nonclin.es_dyear$pubstatus)
+
+```
+```{r}
+# Create multiple plots (e.g., in a 3-row layout)
+par(mfrow = c(3, 1))
+
+# Agentic funnel
+res1 <- rma(yi = es_dyear, vi = v_dyear, data = dat.agentic)
+funnel(res1, main = "Agentic")
+
+# Antagonistic funnel
+res2 <- rma(yi = es_dyear, vi = v_dyear, data = dat.antagonistic)
+funnel(res2, main = "Antagonistic")
+
+# Neurotic funnel
+res3 <- rma(yi = es_dyear, vi = v_dyear, data = dat.neurotic)
+funnel(res3, main = "Neurotic")
+
+# Now record the full set of plots
+fig2 <- recordPlot()
+
+```
+
+
+
+```{r Save Combined Funnel Plots}
+# Create the plot (e.g., funnel plot)
+res <- rma(yi = es_dyear, vi = v_dyear, data = dat.agentic)
+funnel(res, xlab = "Effect Size (d per year)", ylab = "SE")
+
+fig2 <- recordPlot()
+# Stores the current plotting device (all 3 funnel plots) in memory
+
+postscript(file='fig2.eps', width=4, height=9, paper="special", horizontal=F)
+# Opens EPS file for export
+
+fig2
+# Draws the stored funnel plots to the EPS file
+
+dev.off()
+# Closes the graphics device (saves the file)
+
+```
+
+```{r RANK-ORDER STABILITY: Effect Size Analyses}
+res <- rma.mv(yi=corrdis_z, V=v_corrdis, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.agentic)
+# Multilevel model estimating rank-order stability for Agentic trait using z-transformed, disattenuated correlations
+
+print(res, digits=3)
+# Show Agentic model results
+
+sum(dat.agentic.corr.sample$n)
+# Total number of participants for Agentic correlation analysis
+
+fisherz2r(0.997)
+fisherz2r(0.875)
+fisherz2r(1.119)
+# Converts selected z values back to r values (for interpretation)
+
+res <- rma.mv(yi=corrdis_z, V=v_corrdis, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.antagonistic)
+# Same model for Antagonistic trait
+
+print(res, digits=3)
+
+sum(dat.antagonistic.corr.sample$n)
+# Total participants in Antagonistic analysis
+
+fisherz2r(0.842)
+fisherz2r(0.646)
+fisherz2r(1.039)
+# Back-transform selected z values
+
+res <- rma.mv(yi=corrdis_z, V=v_corrdis, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.neurotic)
+# Model for Neurotic trait
+
+print(res, digits=3)
+
+sum(dat.neurotic.corr.sample$n)
+
+fisherz2r(0.695)
+fisherz2r(0.463)
+fisherz2r(0.926)
+
+
+```
+
+```{r Age Effects on Rank-Order Stability: Agentic models}
+res <- rma.mv(yi=corrdis_z, V=v_corrdis, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.agentic, mods = cbind(agem1ic1))
+# Meta-regression with centered age (linear)
+
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis_z, V=v_corrdis, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.agentic, mods = cbind(agem1ic1, agem1ic2))
+# Adds quadratic age term
+
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis_z, V=v_corrdis, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.agentic, mods = cbind(agem1ic1, agem1ic2, agem1ic3))
+# Adds cubic age term
+
+print(res, digits=4)
+
+```
+
+```{r Same pattern for Antagonistic:}
+res <- rma.mv(yi=corrdis_z, V=v_corrdis, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.antagonistic, mods = cbind(agem1ic1))
+
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis_z, V=v_corrdis, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.antagonistic, mods = cbind(agem1ic1, agem1ic2))
+
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis_z, V=v_corrdis, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.antagonistic, mods = cbind(agem1ic1, agem1ic2, agem1ic3))
+
+print(res, digits=4)
+
+```
+
+```{r Neurotic:}
+res <- rma.mv(yi=corrdis_z, V=v_corrdis, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.neurotic, mods = cbind(agem1ic1))
+
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis_z, V=v_corrdis, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.neurotic, mods = cbind(agem1ic1, agem1ic2))
+
+print(res, digits=4)
+
+```
+
+```{r Moderator Analyses for Rank-Order Stability}
+# These models test whether rank-order stability (disattenuated test–retest correlation) varies by gender, cohort, clinical status, and time lag.
+
+res <- rma.mv(yi=corrdis_z, V=v_corrdis, 
+              random = ~ 1 | sampid/caseid,
+              data=dat.agentic, mods = cbind(female, yob, clinical, timelagc))
+# Agentic: multilevel meta-regression with 4 moderators:
+# - female: proportion female in sample
+# - yob: year of birth
+# - clinical: clinical status
+# - timelagc: centered time lag
+
+print(res, digits=4)
+# Print full output with 4-decimal precision
+
+res <- rma.mv(yi=corrdis_z, V=v_corrdis, 
+              random = ~ 1 | sampid/caseid,
+              data=dat.antagonistic, mods = cbind(female, yob, clinical, timelagc))
+# Antagonistic: same model as above for different trait
+
+print(res, digits=4)
+
+```
+
+```{r}
+res <- rma.mv(yi=corrdis_z, V=v_corrdis, 
+              random = ~ 1 | sampid/caseid,
+              data=dat.neurotic, mods = cbind(female, yob, clinical, timelagc))
+# Neurotic: identical model specification to examine moderator effects
+
+print(res, digits=4)
+
+```
+
+```{r Effect Size Analyses Controlled for Time Lag}
+# These models isolate the effect of time lag on trait stability by using timelagc as a moderator.
+
+# Agentic (controlling for time lag)
+res <- rma.mv(yi=corrdis_z, V=v_corrdis, 
+              random = ~ 1 | sampid/caseid,
+              data=dat.agentic, mods = cbind(timelagc))
+# Agentic: controlling for time lag only
+
+print(res, digits=3)
+# Show results
+
+sum(dat.agentic.corr.sample$n)
+# Total sample size used in this Agentic model
+
+fisherz2r(0.935)
+fisherz2r(0.805)
+fisherz2r(1.064)
+# Converts model estimates and confidence intervals from z to r
+
+```
+
+```{r Antagonistic (controlling for time lag)}
+res <- rma.mv(yi=corrdis_z, V=v_corrdis, 
+              random = ~ 1 | sampid/caseid,
+              data=dat.antagonistic, mods = cbind(timelagc))
+# Antagonistic: adjusting for centered time lag
+
+print(res, digits=3)
+
+sum(dat.antagonistic.corr.sample$n)
+# Total number of participants
+
+fisherz2r(0.827)
+fisherz2r(0.632)
+fisherz2r(1.022)
+# Converts estimated Fisher's z values to correlation coefficients
+
+```
+
+```{r Neurotic (controlling for time lag)}
+res <- rma.mv(yi=corrdis_z, V=v_corrdis, 
+              random = ~ 1 | sampid/caseid,
+              data=dat.neurotic, mods = cbind(timelagc))
+# Neurotic trait: time lag controlled
+
+print(res, digits=3)
+
+sum(dat.neurotic.corr.sample$n)
+# Total participant count for this analysis
+
+fisherz2r(0.699)
+fisherz2r(0.512)
+fisherz2r(0.886)
+# Converts model estimate and CI from z to r
+
+```
+
+```{r Age Effects Controlled for Time Lag}
+# These models examine whether age effects persist when time lag is held constant.
+
+cor.test(dat$agem1i, dat$timelag)
+# Check correlation between age and time lag  ensures multicollinearity is not a problem
+
+```
+
+```{r Agentic (age terms + time lag)}
+res <- rma.mv(yi=corrdis_z, V=v_corrdis,
+              random = ~ 1 | sampid/caseid,
+              data=dat.agentic, mods = cbind(agem1ic1, timelagc))
+# Linear age effect with time lag control
+
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis_z, V=v_corrdis,
+              random = ~ 1 | sampid/caseid,
+              data=dat.agentic, mods = cbind(agem1ic1, agem1ic2, timelagc))
+# Adds quadratic age term
+
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis_z, V=v_corrdis,
+              random = ~ 1 | sampid/caseid,
+              data=dat.agentic, mods = cbind(agem1ic1, agem1ic2, agem1ic3, timelagc))
+# Adds cubic age term
+
+print(res, digits=4)
+
+```
+
+```{r Antagonistic (age terms + time lag)}
+res <- rma.mv(yi=corrdis_z, V=v_corrdis,
+              random = ~ 1 | sampid/caseid,
+              data=dat.antagonistic, mods = cbind(agem1ic1, timelagc))
+
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis_z, V=v_corrdis,
+              random = ~ 1 | sampid/caseid,
+              data=dat.antagonistic, mods = cbind(agem1ic1, agem1ic2, timelagc))
+
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis_z, V=v_corrdis,
+              random = ~ 1 | sampid/caseid,
+              data=dat.antagonistic, mods = cbind(agem1ic1, agem1ic2, agem1ic3, timelagc))
+
+print(res, digits=4)
+
+```
+
+```{r Neurotic (age terms + time lag)}
+res <- rma.mv(yi=corrdis_z, V=v_corrdis,
+              random = ~ 1 | sampid/caseid,
+              data=dat.neurotic, mods = cbind(agem1ic1, timelagc))
+
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis_z, V=v_corrdis,
+              random = ~ 1 | sampid/caseid,
+              data=dat.neurotic, mods = cbind(agem1ic1, agem1ic2, timelagc))
+
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis_z, V=v_corrdis,
+              random = ~ 1 | sampid/caseid,
+              data=dat.neurotic, mods = cbind(agem1ic1, agem1ic2, agem1ic3, timelagc))
+
+print(res, digits=4)
+
+```
+
+```{r Replication of Rank-Order Stability Analyses Using factor2 }
+# This repeats earlier correlation-based analyses using a more conservative/restricted definition of traits.
+# Agentic (factor2)
+
+res <- rma.mv(yi=corrdis_z, V=v_corrdis, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.agentic2)
+# Agentic: correlation-based stability model using reduced coding (factor2)
+
+print(res, digits=3)
+# Show results
+
+sum(dat.agentic2.corr.sample$n)
+# Total sample size for reduced Agentic analysis
+
+fisherz2r(0.850)
+fisherz2r(0.776)
+fisherz2r(0.925)
+# Converts z-score estimates and CI to Pearson's r
+
+```
+
+```{r Antagonistic (factor2)}
+res <- rma.mv(yi=corrdis_z, V=v_corrdis, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.antagonistic2)
+
+print(res, digits=3)
+
+sum(dat.antagonistic2.corr.sample$n)
+
+fisherz2r(0.809)
+fisherz2r(0.627)
+fisherz2r(0.990)
+
+```
+
+```{r Neurotic (factor2)}
+res <- rma.mv(yi=corrdis_z, V=v_corrdis, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.neurotic2)
+
+print(res, digits=3)
+
+sum(dat.neurotic2.corr.sample$n)
+
+fisherz2r(1.040)
+fisherz2r(0.854)
+fisherz2r(1.226)
+
+```
+
+```{r Time Lag Controlled Models with Reduced Measures: Agentic}
+res <- rma.mv(yi=corrdis_z, V=v_corrdis, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.agentic2, mods = cbind(timelagc))
+# Controls for time lag with reduced Agentic coding
+
+print(res, digits=3)
+
+sum(dat.agentic2.corr.sample$n)
+
+fisherz2r(0.828)
+fisherz2r(0.748)
+fisherz2r(0.907)
+
+```
+
+```{r Time Lag Controlled Models with Reduced Measures: Antagonistic}
+res <- rma.mv(yi=corrdis_z, V=v_corrdis, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.antagonistic2, mods = cbind(timelagc))
+
+print(res, digits=3)
+
+sum(dat.antagonistic2.corr.sample$n)
+
+fisherz2r(0.795)
+fisherz2r(0.625)
+fisherz2r(0.966)
+
+```
+
+```{r Time Lag Controlled Models with Reduced Measures:Neurotic}
+res <- rma.mv(yi=corrdis_z, V=v_corrdis, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.neurotic2, mods = cbind(timelagc))
+
+print(res, digits=3)
+
+sum(dat.neurotic2.corr.sample$n)
+
+fisherz2r(1.040)
+fisherz2r(0.854)
+fisherz2r(1.226)
+
+```
+
+
+```{r Nonlinear Regression}
+# This section models the relationship between time lag and disattenuated correlation (corrdis) using an exponential decay function:
+# corrdis ~ a + (1 − a) * exp(−b * timelag)
+
+```
+
+```{r Agentic}
+nls <- nls(corrdis ~ a + (1 - a) * exp(-b * timelag), 
+           data=dat.agentic, start=list(a=0.5, b=1.0), trace = TRUE)
+# Nonlinear least squares model fit with starting values for a and b
+
+summary(nls)
+# Displays fit summary
+
+datnls <- subset(dat.agentic, subset = corrdis != "NA")
+# Removes missing correlations
+
+datnls$prednls = predict(nls)
+# Store predicted values from nls fit
+
+fig3a <- ggplot(datnls, aes(x = timelag, y = corrdis)) + 
+  geom_point() + 
+  geom_line(aes(y = prednls), linewidth = 1) +
+  scale_x_continuous(breaks = seq(0, 70, 10), lim = c(0, 70), expand = c(0,0)) +
+  scale_y_continuous(breaks = seq(0, 1, 0.2), lim = c(0, 1), expand = c(0,0)) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+        panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  labs(tag = "A", title = "Agentic Narcissism", x = "Time Lag", y = "Rank-Order Stability")
+# Plots empirical points + exponential fit
+
+```
+
+```{r Repeat for Antagonistic:}
+nls <- nls(corrdis ~ a + (1 - a) * exp(-b * timelag), 
+           data=dat.antagonistic, start=list(a=0.5, b=1.0), trace = TRUE)
+
+summary(nls)
+
+datnls <- subset(dat.antagonistic, subset = corrdis != "NA")
+datnls$prednls = predict(nls)
+
+fig3b <- ggplot(datnls, aes(x = timelag, y = corrdis)) + 
+  geom_point() + 
+  geom_line(aes(y = prednls), linewidth = 1) +
+  scale_x_continuous(breaks = seq(0, 70, 10), lim = c(0, 70), expand = c(0,0)) +
+  scale_y_continuous(breaks = seq(0, 1, 0.2), lim = c(0, 1), expand = c(0,0)) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+        panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  labs(tag = "B", title = "Antagonistic Narcissism", x = "Time Lag", y = "Rank-Order Stability")
+
+```
+
+```{r Neurotic}
+nls <- nls(corrdis ~ a + (1 - a) * exp(-b * timelag), 
+           data=dat.neurotic, start=list(a=0.5, b=1.0), trace = TRUE)
+
+summary(nls)
+
+datnls <- subset(dat.neurotic, subset = corrdis != "NA")
+datnls$prednls = predict(nls)
+
+fig3c <- ggplot(datnls, aes(x = timelag, y = corrdis)) + 
+  geom_point() + 
+  geom_line(aes(y = prednls), linewidth = 1) +
+  scale_x_continuous(breaks = seq(0, 70, 10), lim = c(0, 70), expand = c(0,0)) +
+  scale_y_continuous(breaks = seq(0, 1, 0.2), lim = c(0, 1), expand = c(0,0)) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+        panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  labs(tag = "C", title = "Neurotic Narcissism", x = "Time Lag", y = "Rank-Order Stability")
+
+```
+
+```{r}
+postscript(file='fig3.eps', width=4.4, height=10, paper="special", horizontal=F)
+# EPS export for all 3 nonlinear plots
+
+fig3a + fig3b + fig3c + plot_layout(ncol = 1)
+# Combines plots vertically using patchwork
+
+dev.off()
+# Close graphics device
+
+```
+
+```{r Publication Bias: Rank-Order Stability}
+par(mfrow = c(3, 1))
+# Sets up plotting area to display 3 funnel plots (Agentic, Antagonistic, Neurotic) in one column
+
+```
+
+```{r Agentic}
+res <- rma(yi=corrdis_z, vi=v_corrdis, data=dat.agentic)
+# Simple random-effects model for Agentic correlation data
+
+print(res, digits=3)
+# Print model summary
+
+regtest(res)
+# Egger's regression test to detect funnel plot asymmetry (i.e., publication bias)
+
+funnel(res, xlab="Effect Size (Fisher's z Value)", 
+       ylab="Standard Error", 
+       main="Agentic Narcissism") +
+  mtext("A", side = 3, line = 2.4, adj = -0.16, cex = 1.0)
+# Creates funnel plot and adds label "A" at top
+
+res <- rma.mv(yi=corrdis_z, V=v_corrdis, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.agentic, mods = cbind(pubstatus))
+# Multilevel model with pubstatus as moderator
+
+print(res, digits=3)
+# Show model summary
+
+table(dat.agentic.corr$pubstatus)
+# Displays frequency of published vs. unpublished samples
+
+```
+
+```{r Antagonistic}
+res <- rma(yi=corrdis_z, vi=v_corrdis, data=dat.antagonistic)
+
+print(res, digits=3)
+
+regtest(res)
+
+funnel(res, xlab="Effect Size (Fisher's z Value)", 
+       ylab="Standard Error", 
+       main="Antagonistic Narcissism") +
+  mtext("B", side = 3, line = 2.4, adj = -0.16, cex = 1.0)
+# Funnel plot for Antagonistic stability
+
+res <- rma.mv(yi=corrdis_z, V=v_corrdis, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.antagonistic, mods = cbind(pubstatus))
+
+print(res, digits=3)
+
+table(dat.antagonistic.corr$pubstatus)
+
+```
+
+```{r Neurotic}
+res <- rma(yi=corrdis_z, vi=v_corrdis, data=dat.neurotic)
+
+print(res, digits=3)
+
+regtest(res)
+
+funnel(res, xlab="Effect Size (Fisher's z Value)", 
+       ylab="Standard Error", 
+       main="Neurotic Narcissism") +
+  mtext("C", side = 3, line = 2.4, adj = -0.16, cex = 1.0)
+# Funnel plot for Neurotic trait
+
+res <- rma.mv(yi=corrdis_z, V=v_corrdis, 
+              random = ~ 1 | sampid/caseid, 
+              data=dat.neurotic, mods = cbind(pubstatus))
+
+print(res, digits=3)
+
+table(dat.neurotic.corr$pubstatus)
+
+```
+
+```{r}
+# Create 3 funnel plots (this must run before recordPlot)
+par(mfrow = c(3, 1))  # 3 vertical panels
+
+# Plot 1: Agentic
+res_a <- rma(yi = corrdis_z, vi = v_corrdis, data = dat.agentic)
+funnel(res_a, main = "Agentic")
+
+# Plot 2: Antagonistic
+res_b <- rma(yi = corrdis_z, vi = v_corrdis, data = dat.antagonistic)
+funnel(res_b, main = "Antagonistic")
+
+# Plot 3: Neurotic
+res_c <- rma(yi = corrdis_z, vi = v_corrdis, data = dat.neurotic)
+funnel(res_c, main = "Neurotic")
+
+# Now that plots are rendered, record them
+fig4 <- recordPlot()
+
+```
+
+
+```{r Save Final Plot}
+#fig4 <- recordPlot()
+# Stores the current plotting panel (all 3 funnel plots)
+
+postscript(file='fig4.eps', width=4, height=9, paper="special", horizontal=F)
+# Exports the full 3-panel funnel plot to EPS
+
+fig4
+# Renders the stored plot
+
+dev.off()
+# Closes EPS file output
+
+```
+

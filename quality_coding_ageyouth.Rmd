@@ -1,0 +1,66 @@
+---
+title: "quality_coding_ageyouth"
+author: "Prerana"
+date: "2025-09-11"
+output: html_document
+---
+```{r Load packages}
+library(readxl)             # Loads package for reading Excel files
+library(metafor)            # Loads metafor package for conducting meta-analyses
+library(psych)              # Loads psych package for descriptive statistics and psychometrics
+library(ggplot2)            # Loads ggplot2 for creating visualizations
+library(patchwork)          # Loads patchwork to combine multiple ggplots into one
+library(dplyr)
+library(janitor)
+
+theme_update(              # Updates global ggplot2 theme settings
+  plot.title = element_text(hjust = 0.5),            # Center-aligns plot titles
+  axis.text.x = element_text(color="black"),        # Sets x-axis text color to black
+  axis.text.y = element_text(color="black")         # Sets y-axis text color to black
+)
+
+```
+
+
+```{r Data read}
+# Step 1: Read Excel file with original column names
+data_youth_qc <- read_xlsx("data/ageYouth_qualitycode_.xlsx", skip = 1)
+head(data_youth_qc)
+
+```
+
+```{r data cleaning}
+
+
+# Clean the data
+dat_clean <- data_youth_qc %>%
+  # Drop unwanted columns
+  select(-`5_Reviewer`, -`4_Agre`) %>%
+  # Recode all non-ID/Title columns
+  mutate(across(
+    -c(`0_IDF`, `1_ID`, `2_Author`, `3_Year`, `4_Title`, `Rep_Rep`),
+    ~ case_when(
+      . %in% c("yes", "Yes") ~ 0,
+      . %in% c("no", "No") ~ 1,
+      . %in% c("9999", "unable to determine") ~ NA_real_,
+      TRUE ~ NA_real_
+    )
+  ))
+
+# Inspect result
+head(dat_clean)
+
+```
+
+
+```{r}
+library(openxlsx)
+
+# Save cleaned data to Excel
+output_file <- "output/quality_coding_clean.xlsx"
+write.xlsx(dat_clean, output_file, rowNames = FALSE)
+
+cat("File saved as:", output_file)
+
+```
+

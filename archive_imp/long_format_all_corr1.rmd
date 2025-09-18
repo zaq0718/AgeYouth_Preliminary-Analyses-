@@ -1,0 +1,126 @@
+---
+title: "Converting Agewell Codesheet to Long Format including All Correlations and Timelags"
+output: html_notebook
+---
+
+```{r setup, include=TRUE}
+
+# Load Libraries and Read Data
+
+library(openxlsx)
+library(dplyr)
+library(tidyr)
+library(stringr)
+
+# Define file paths
+file_path <- "data/included_studies_1-13.xlsx" 
+output_path <- "output/long_format_with_all_corr.xlsx"
+
+# Read Excel data starting from row 2 (headers start here)
+data <- read.xlsx(file_path, startRow = 2)
+
+# Clean column names to remove unwanted characters and whitespace
+clean_names <- function(x) {
+  x <- gsub('["\']', "", x)             # remove quotes
+  x <- gsub("&#10;?", "", x)             # remove HTML newline
+  x <- gsub("[\r\n]", "", x)            # remove actual newlines
+  x <- trimws(x)                          # trim edges
+  x <- gsub("\\s+", "", x)              # remove inner whitespace
+  return(x)
+}
+names(data) <- clean_names(names(data))
+```
+
+```{r define-columns}
+
+# Define and Set Column Order Dynamically by Pattern
+
+# Static columns to keep
+keep_static <- c("0_IDF", "1_ID", "1.1_CaseID", "2_Author", "3_Year", "29_WbPoint")
+
+# Extract and sort numeric index from column name for t1 to t12
+extract_index <- function(col) {
+  idx <- as.numeric(str_extract(col, "(?<=WB(mt|sdt))\\d+"))
+  ifelse(is.na(idx), Inf, idx)
+}
+
+# Collect and order WBmt and WBsdt interleaved
+wbmt <- grep("_WBmt\\d+$", names(data), value = TRUE, ignore.case = TRUE)
+wbsdt <- grep("_WBsdt\\d+$", names(data), value = TRUE, ignore.case = TRUE)
+wbmt <- wbmt[order(extract_index(wbmt))]
+wbsdt <- wbsdt[order(extract_index(wbsdt))]
+ordered_mt_sdt <- c(rbind(wbmt, wbsdt))
+
+# Collect all WBt and WBcort pairs in tX-tY order
+extract_pair_index <- function(col) {
+  parts <- str_match(col, "t(\\d+)t(\\d+)")[,2:3]
+  if (any(is.na(parts))) return(Inf)
+  as.numeric(parts[1]) * 100 + as.numeric(parts[2])
+}
+
+wbt <- grep("_WBt\\d+t\\d+$", names(data), value = TRUE, ignore.case = TRUE)
+wbcort <- grep("_WBcort\\d+t\\d+$", names(data), value = TRUE, ignore.case = TRUE)
+wbt <- wbt[order(sapply(wbt, extract_pair_index))]
+wbcort <- wbcort[order(sapply(wbcort, extract_pair_index))]
+
+# Final custom column order
+custom_columns <- c(ordered_mt_sdt, wbt, wbcort)
+
+# Add interval and combine
+timepoints <- 1:11
+intervals <- paste0(timepoints, "-", timepoints + 1)
+data$interval <- NA
+final_col_order <- c(keep_static, "interval", custom_columns)
+```
+
+
+```{r reorder columns}
+
+# Reorder and Subset Columns
+
+# Ensure all specified columns exist in dataset
+available_cols <- intersect(final_col_order, names(data))
+data <- data[, available_cols, drop = FALSE]
+```
+
+
+```{r reshape-intervals}
+
+# Convert to Long Format by Interval Logic (Preserving All Columns)
+
+# Predefine expected WBmt and WBsdt column names
+all_wbmt_cols <- paste0("_WBmt", 1:12)
+all_wbsdt_cols <- paste0("_WBsdt", 1:12)
+timepoints <- 1:11
+intervals <- paste0(timepoints, "-", timepoints + 1)
+long_rows <- list()
+
+# Loop over each case/row
+for (i in 1:nrow(data)) {
+  static_info <- data[i, keep_static]
+  base_row <- data[i, ]
+
+  for (tp in timepoints) {
+    interval_label <- paste0(tp, "-", tp + 1)
+
+    row <- base_row
+    row$interval <- interval_label
+
+    long_rows[[length(long_rows) + 1]] <- row
+  }
+}
+```
+
+
+```{r}
+long_format <- bind_rows(long_rows)
+long_format[long_format == ""] <- NA    # Replace empty strings with NA
+```
+
+```{r export}
+
+# Export to Excel
+long_format <- bind_rows(long_rows)
+write.xlsx(long_format[, final_col_order], output_path, rowNames = FALSE)
+cat("File saved with all correlation columns in exact order.\n")
+```

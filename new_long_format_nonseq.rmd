@@ -1,0 +1,298 @@
+---
+title: "Converting Agewell Codesheet to long Format Sequential"
+author: "Prerana Chandratre"
+output: html_notebook
+---
+
+```{r}
+# Run this file only after running the 'long_format_seq.rmd' file for the final results
+```
+
+
+```{r Loading Important Data}
+# Load Required Libraries and Import Data
+library(openxlsx)   # for reading/writing Excel files
+library(dplyr)      # for data manipulation
+library(tidyr)      # for reshaping data
+library(stringr)    # for string pattern matching
+
+# Define file paths
+file_path <- "data/included_studies_1-13.xlsx"           # input file path
+output_path <- "output/long_format_with_seq_corr.xlsx" # unused output path
+
+# Read the Excel file starting from row 2, assuming headers start there
+data <- read.xlsx(file_path, startRow = 2)
+
+#  Function to clean and standardize column names
+clean_names <- function(x) {
+  x <- gsub('["\']', "", x)          # Remove quotation marks
+  x <- gsub("&#10;?", "", x)         # Remove HTML newline codes
+  x <- gsub("[\r\n]", "", x)         # Remove actual newline characters
+  x <- trimws(x)                     # Trim leading/trailing spaces
+  x <- gsub("\\s+", "", x)           # Remove inner spaces
+  return(x)
+}
+
+# Apply the cleaning function to column names
+names(data) <- clean_names(names(data))
+
+```
+
+
+```{r static-and-dynamic-columns}
+# Define Static Columns and Filter WB Variables
+
+
+# List of static columns (subject identifiers, authors, year, etc.)
+keep_static <- c("0_IDF", "1_ID", "1.1_CaseID", "2_Author", "3_Year", "29_WbPoint", "10_Size")
+```
+
+
+```{r Sorting Data}
+# Initialize an empty list to store new rows for non-sequential intervals
+nonseq_rows <- list()
+
+# Loop through each row of the dataset
+for (i in 1:nrow(data)) {
+  # Extract the static information for this row (e.g., study ID, year, etc.)
+  static_info <- data[i, keep_static]
+
+  # Identify all WBt (time lag values) and WBcort (correlations) column names
+  wbt_cols <- grep("_WBt\\d+t\\d+$", names(data), value = TRUE)      # Columns with pattern like _WBt1t3
+  wbcort_cols <- grep("_WBcort\\d+t\\d+$", names(data), value = TRUE) # Columns with pattern like _WBcort1t3
+
+  # Extract all unique time interval pairs (e.g., t1t3 → 1,3)
+  interval_labels <- unique(c(wbt_cols, wbcort_cols))
+  all_pairs <- unique(str_match(interval_labels, "t(\\d+)t(\\d+)")[, 2:3])
+
+  # Loop over each unique interval pair
+  for (j in seq_len(nrow(all_pairs))) {
+    t1 <- as.integer(all_pairs[j, 1])   # Extract first time point
+    t2 <- as.integer(all_pairs[j, 2])   # Extract second time point
+
+    # Skip invalid or sequential intervals (e.g., t1t2, t2t3)
+    if (is.na(t1) || is.na(t2) || (t2 - t1) <= 1) next
+
+    # Create interval label (e.g., "1-3")
+    interval_label <- paste0(t1, "-", t2)
+
+    # Start a new row with static info and add the interval label
+    row <- static_info
+    row$interval <- interval_label
+
+    # Find the matching WBt and WBcort columns for this interval
+    tlag_col <- grep(paste0("_WBt", t1, "t", t2, "$"), names(data), value = TRUE)
+    corr_col <- grep(paste0("_WBcort", t1, "t", t2, "$"), names(data), value = TRUE)
+
+    # Add WBt value to row if available
+    if (length(tlag_col) == 1) row[[tlag_col]] <- data[[tlag_col]][i]
+    # Add WBcort value to row if available
+    if (length(corr_col) == 1) row[[corr_col]] <- data[[corr_col]][i]
+
+    # Append this new row to nonseq_rows list only if at least one value exists
+    if (length(tlag_col) + length(corr_col) > 0) {
+      nonseq_rows[[length(nonseq_rows) + 1]] <- row
+    }
+  }
+}
+
+# Combine all rows into a long-format dataframe
+long_format_nonseq <- bind_rows(nonseq_rows)
+
+# Replace empty strings with NA for consistency
+long_format_nonseq[long_format_nonseq == ""] <- NA
+
+```
+
+
+```{r Generate New Column as Interval for calculating intervals}
+# Step 1: Ensure all column types are valid
+long_format_nonseq <- long_format_nonseq %>% 
+  mutate(
+    interval = as.character(interval),             # Convert interval labels to character (e.g., "1-3")
+    timepoints = as.numeric(na_if(`29_WbPoint`, ""))  # Convert timepoint column to numeric, treating "" as NA
+  ) %>% 
+  filter(!is.na(interval) & !is.na(timepoints))    # Keep only rows with valid interval + timepoint info
+
+
+# Step 2: Generate all valid interval labels for each row based on timepoints
+generate_allowed_intervals <- function(tp_scalar) {
+  out <- c()
+  # Only proceed if we have a single valid scalar timepoint count (≥ 3)
+  if (length(tp_scalar) == 1 && !is.na(tp_scalar) && tp_scalar >= 3) {  # Scalar-safe condition
+    # Loop over start time (i) and end time (j)
+    for (i in 1:(tp_scalar - 2)) {             # Start must be at least 2 less than max
+      for (j in (i + 2):tp_scalar) {           # End must be at least 2 steps after start (non-sequential)
+        out <- c(out, paste0(i, j))            # Build interval string like "13", "14", "24"
+      }
+    }
+  }
+  return(out)   # Return vector of allowed intervals
+}
+
+
+# Step 3: Filter only allowed intervals row-wise
+long_format_nonseq_filtered <- long_format_nonseq %>% 
+  filter(str_detect(interval, "^\\d+-\\d+$")) %>%   # Keep only valid "x-y" interval strings (regex check)
+  rowwise() %>% 
+  filter({
+    # Extract start and end numbers from the interval string
+    start <- as.integer(str_extract(interval, "^\\d+"))
+    end <- as.integer(str_extract(interval, "\\d+$"))
+    current_interval <- paste0(start, end)          # Collapse into "xy" format for comparison
+
+    # Keep row only if current interval is in allowed set for this study’s timepoints
+    current_interval %in% generate_allowed_intervals(timepoints)
+  }) %>% 
+  ungroup()   # Remove rowwise grouping for downstream operations
+
+
+```
+
+
+```{r Extract and Merge Interval Columns for Non-Sequential Intervals}
+
+
+# Define relevant static columns
+static_cols <- c("1_ID", "1.1_CaseID", "2_Author", "3_Year", "interval", "timepoints", "10_Size")
+
+# Create a container for rows
+merged_nonseq_rows <- list()
+
+# Loop through each row
+for (i in 1:nrow(long_format_nonseq_filtered)) {
+  row <- long_format_nonseq_filtered[i, ]
+
+  # Parse interval (e.g., "1-4") into i and j
+  interval <- row$interval
+  split <- str_split(interval, "-")[[1]]
+  i_tp <- as.integer(split[1])
+  j_tp <- as.integer(split[2])
+
+  # Dynamically find column names for this interval
+  WBt_col <- grep(paste0("_WBt", i_tp, "t", j_tp, "$"), names(row), value = TRUE, ignore.case = TRUE)
+  WBcorr_col <- grep(paste0("_WBcort", i_tp, "t", j_tp, "$"), names(row), value = TRUE, ignore.case = TRUE)
+
+  # Assemble row
+  merged <- row[static_cols]
+  merged$WBtitj <- if (length(WBt_col)) as.numeric(row[[WBt_col]]) else NA
+  merged$WBcorrij <- if (length(WBcorr_col)) as.numeric(row[[WBcorr_col]]) else NA
+
+  # Add to result
+  merged_nonseq_rows[[length(merged_nonseq_rows) + 1]] <- merged
+}
+
+# Final dataframe
+long_format_nonseq_combine <- bind_rows(merged_nonseq_rows)
+
+# Preview the output
+head(long_format_nonseq_combine)
+
+```
+
+
+
+```{r merging for final output}
+# Step 1: Get full set of column names
+all_cols <- union(names(long_format_merged), names(long_format_nonseq_combine))
+
+# Step 2: Ensure both have same columns (fill missing with NA)
+for (col in setdiff(all_cols, names(long_format_merged))) {
+  long_format_merged[[col]] <- NA
+}
+for (col in setdiff(all_cols, names(long_format_nonseq_combine))) {
+  long_format_nonseq_combine[[col]] <- NA
+}
+
+# Step 3: Match column types - coerce character/numeric mismatches
+for (col in intersect(names(long_format_merged), names(long_format_nonseq_combine))) {
+  class_seq <- class(long_format_merged[[col]])[1]
+  class_nonseq <- class(long_format_nonseq_combine[[col]])[1]
+  
+  if (class_seq != class_nonseq) {
+    # If either is character, coerce both to character
+    long_format_merged[[col]] <- as.character(long_format_merged[[col]])
+    long_format_nonseq_combine[[col]] <- as.character(long_format_nonseq_combine[[col]])
+  }
+}
+
+# Step 4: Reorder columns the same way
+long_format_merged <- long_format_merged[, all_cols]
+long_format_nonseq_combine <- long_format_nonseq_combine[, all_cols]
+
+# Step 5: Merge safely
+long_format_combined <- bind_rows(long_format_merged, long_format_nonseq_combine)
+
+#  Optional: Sort by ID and interval
+long_format_combined <- long_format_combined %>%
+  arrange(`1_ID`, interval)
+
+
+```
+
+
+```{r saving output with color}
+library(openxlsx)
+
+# Define file path for output
+final_output_path <- "output/final_combined_highlighted.xlsx"
+
+# Step 1: Add indicator column before combining
+long_format_merged$source <- "sequential"
+long_format_nonseq_combine$source <- "non_sequential"
+
+# Step 2: Re-align columns
+all_cols <- union(names(long_format_merged), names(long_format_nonseq_combine))
+
+for (col in setdiff(all_cols, names(long_format_merged))) {
+  long_format_merged[[col]] <- NA
+}
+for (col in setdiff(all_cols, names(long_format_nonseq_combine))) {
+  long_format_nonseq_combine[[col]] <- NA
+}
+
+for (col in intersect(names(long_format_merged), names(long_format_nonseq_combine))) {
+  if (class(long_format_merged[[col]])[1] != class(long_format_nonseq_combine[[col]])[1]) {
+    long_format_merged[[col]] <- as.character(long_format_merged[[col]])
+    long_format_nonseq_combine[[col]] <- as.character(long_format_nonseq_combine[[col]])
+  }
+}
+
+# Step 3: Reorder columns
+long_format_merged <- long_format_merged[, all_cols]
+long_format_nonseq_combine <- long_format_nonseq_combine[, all_cols]
+
+# Step 4: Combine
+long_format_combined <- bind_rows(long_format_merged, long_format_nonseq_combine)
+
+# Step 5: Sort
+long_format_combined <- long_format_combined %>%
+  arrange(`1_ID`, interval)
+
+# Step 6: Create workbook and styles
+wb <- createWorkbook()
+addWorksheet(wb, "Combined_Output")
+
+# Define styles
+style_seq <- createStyle(fgFill = "#D2E4FC")   # Light blue
+style_nonseq <- createStyle(fgFill = "#D6F5D6") # Light green
+
+# Write data
+writeData(wb, "Combined_Output", long_format_combined)
+
+# Apply styles row-wise
+for (i in 1:nrow(long_format_combined)) {
+  if (long_format_combined$source[i] == "sequential") {
+    addStyle(wb, "Combined_Output", style_seq, rows = i + 1, cols = 1:ncol(long_format_combined), gridExpand = TRUE)
+  } else if (long_format_combined$source[i] == "non_sequential") {
+    addStyle(wb, "Combined_Output", style_nonseq, rows = i + 1, cols = 1:ncol(long_format_combined), gridExpand = TRUE)
+  }
+}
+
+# Save workbook
+saveWorkbook(wb, final_output_path, overwrite = TRUE)
+
+cat("Highlighted Excel file saved at:", final_output_path, "\n")
+
+```
+

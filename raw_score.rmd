@@ -1,0 +1,841 @@
+---
+title: " Calculate Raw Score and testing different model for meta analysis"
+author: "Prerana Chandratre"
+date: "02/07/2025"
+output: html_document
+---
+
+
+```{r Load Required Libraries and Import Data}
+
+# Load Required Libraries and Import Data
+library(openxlsx)   # Library to read/write Excel files
+library(dplyr)      # Library for efficient data manipulation using pipes and verbs
+library(tidyr)      # Library for reshaping and tidying data
+library(stringr)    # Library for string operations and pattern matching
+
+# Define file paths
+file_path <- "data/included_studies_1-13.xlsx"           # Path to the input Excel file (AgeWell dataset)
+output_path <- "output/long_format_with_seq_corr.xlsx"   # Placeholder path for output (not used yet)
+
+# Read the Excel file starting from row 2, assuming headers start on the second row
+data <- read.xlsx(file_path, startRow = 2)
+
+# Define a function to clean and standardize column names
+clean_names <- function(x) {
+  x <- gsub('["\']', "", x)          # Remove double and single quotes
+  x <- gsub("&#10;?", "", x)         # Remove HTML newline codes (like '&#10;')
+  x <- gsub("[\r\n]", "", x)         # Remove actual newline characters (carriage returns and linefeeds)
+  x <- trimws(x)                     # Trim leading and trailing whitespace
+  x <- gsub("\\s+", "", x)           # Remove all inner spaces
+  return(x)                          # Return the cleaned name vector
+}
+
+# Apply the cleaning function to all column names of the data
+names(data) <- clean_names(names(data))
+
+```
+
+
+```{r static-and-dynamic-columns}
+# Define Static Columns and Filter WB Variables
+
+
+# List of static columns (subject identifiers, authors, year, etc.)
+keep_static <- c("0_IDF", "1_ID", "1.1_CaseID", "2_Author", "3_Year", "29_WbPoint", "10_Size", "11_Mage", "16_CNT", "17_Eth", "18_Female","Negative/Positive+LS", "30_Covid", "31_WBm", "33_Relt1", "34_Relt")
+
+# Regex patterns to match dynamic WB columns
+wb_patterns <- c(
+  "^\\d+_WBmt\\d+$",           # e.g. 12_WBmt1
+  "^\\d+_WBsdt\\d+$",          # e.g. 12_WBsdt1
+  "^\\d+_WBt(\\d+)t(\\d+)$",   # e.g. 12_WBt1t2
+  "^\\d+_WBcort(\\d+)t(\\d+)$" # e.g. 12_WBcort1t2
+)
+
+# Collect columns that match the WB patterns
+wb_cols <- unique(unlist(lapply(wb_patterns, function(p) grep(p, names(data), value = TRUE, ignore.case = TRUE))))
+
+# Filter to include only time-sequential intervals (e.g., 1-2, 2-3, ... 11-12)
+is_sequential <- function(name) {
+  match <- str_match(name, "t(\\d+)t(\\d+)")
+  #if (any(is.na(match[1, 2:3]))) return(TRUE) 
+  if (is.na(match[1,2]) || is.na(match[1,3])) return(TRUE)  # Allow mt/sdt columns without time ranges
+  return(as.integer(match[1,3]) - as.integer(match[1,2]) == 1)  # Ensure intervals are sequential
+  #return(as.integer(match[1, 3]) - as.integer(match[1, 2]) == 1)
+}
+wb_cols <- wb_cols[sapply(wb_cols, is_sequential)]
+
+# Combine static and dynamic columns
+all_cols <- intersect(c(keep_static, wb_cols), names(data))
+
+# Subset the data with selected columns
+data <- data[, all_cols, drop = FALSE]
+
+# Convert all non-static (i.e., dynamic WB) columns to numeric
+data[setdiff(names(data), keep_static)] <- lapply(data[setdiff(names(data), keep_static)], as.numeric)
+
+```
+
+```{r Adding time intervals}
+# Define Time Intervals
+timepoints <- 1:11                       # From timepoint 1 to 11 (for intervals 1-2 to 11-12)
+intervals <- paste0(timepoints, "-", timepoints + 1)  # Create interval labels (e.g., "1-2", "2-3", etc.)
+
+# Prepare an empty list to store reshaped rows
+long_rows <- list()
+
+```
+
+
+```{r Transform Each Row into Long Format}
+
+# Predefine expected WBmt and WBsdt column names
+all_wbmt_cols <- paste0("_WBmt", 1:12)
+all_wbsdt_cols <- paste0("_WBsdt", 1:12)
+
+# Loop over each case/row
+for (i in 1:nrow(data)) {
+  static_info <- data[i, keep_static]  # Extract static info for this row
+
+  # Iterate over each time interval (1-2, 2-3, ..., 11-12)
+  for (tp in timepoints) {
+    interval_label <- paste0(tp, "-", tp + 1)
+
+    # Dynamically get column names for required variables for this interval
+    mean1_col       <- grep(paste0("_WBmt", tp, "$"), names(data), value = TRUE, ignore.case = TRUE)
+    sd1_col         <- grep(paste0("_WBsdt", tp, "$"), names(data), value = TRUE, ignore.case = TRUE)
+    mean2_col       <- grep(paste0("_WBmt", tp + 1, "$"), names(data), value = TRUE, ignore.case = TRUE)
+    sd2_col         <- grep(paste0("_WBsdt", tp + 1, "$"), names(data), value = TRUE, ignore.case = TRUE)
+    timelag_col     <- grep(paste0("_WBt", tp, "t", tp + 1, "$"), names(data), value = TRUE, ignore.case = TRUE)
+    correlation_col <- grep(paste0("_WBcort", tp, "t", tp + 1, "$"), names(data), value = TRUE, ignore.case = TRUE)
+
+    # Skip if any key column is missing
+    if (length(mean1_col) != 1 || length(sd1_col) != 1 ||
+        length(mean2_col) != 1 || length(sd2_col) != 1 ||
+        length(timelag_col) != 1 || length(correlation_col) != 1) {
+      next
+    }
+
+    # Create a new row for long format
+    row <- static_info
+    row$interval <- interval_label
+    row[[mean1_col]] <- data[[mean1_col]][i]
+    row[[sd1_col]] <- data[[sd1_col]][i]
+    row[[mean2_col]] <- data[[mean2_col]][i]
+    row[[sd2_col]] <- data[[sd2_col]][i]
+    row[[timelag_col]] <- data[[timelag_col]][i]
+    row[[correlation_col]] <- data[[correlation_col]][i]
+
+    # Append the constructed row to long_rows list
+    long_rows[[length(long_rows) + 1]] <- row
+  }
+
+  # Ensure all mean/sd columns are present in each row even if NA
+  for (col in c(all_wbmt_cols, all_wbsdt_cols)) {
+    if (!(col %in% names(row))) {
+      row[[col]] <- NA
+    }
+  }
+}
+
+```
+
+```{r Merging Output}
+# Combine Long Format Data
+long_format <- bind_rows(long_rows)     # Combine all reshaped rows into a single data frame
+long_format[long_format == ""] <- NA    # Replace empty strings with NA
+
+```
+
+
+```{r Timepoints processing}
+# Add Timepoints and Rename Original Column
+
+long_format <- long_format %>%
+  mutate(timepoints = as.numeric(`29_WbPoint`)) %>%  # Convert timepoints to numeric
+  select(-`29_WbPoint`)                              # Rename original WB point column
+
+```
+
+
+```{r Filter Rows Based on Timepoints}
+
+# Add interval start (e.g., for "1-2", interval_start = 1)
+long_format$interval_start <- as.numeric(sub("-.*", "", long_format$interval))
+
+# Retain only rows where interval start < max timepoints
+long_format <- long_format %>%
+  filter(is.na(timepoints) | interval_start < timepoints) %>%
+  select(-interval_start)  # Drop temporary column
+
+```
+
+
+```{r Validation for accurate Output}
+# Sanity Check on Key Columns
+cols_to_check <- c("0_IDF", "1_ID", "1.1_CaseID", "2_Author", "3_Year", "29_WbPoint", "10_Size", "11_Mage", "16_CNT", "17_Eth", "18_Female","Negative/Positive+LS", "30_Covid", "31_WBm",  "33_Relt1", "34_Relt")
+
+# Check if these columns exist in the data and print their types
+for (col in cols_to_check) {
+  if (col %in% names(long_format)) {
+    cat(col, ":", class(long_format[[col]]), "\n")
+  } else {
+    cat(col, ": NOT FOUND in long_format\n")
+  }
+}
+
+```
+
+```{r Reorder columns manually by specifying the desired column sequence}
+
+# Reorder columns manually by specifying the desired column sequence
+long_format <- long_format %>%
+  select(
+      '0_IDF',                 # Unique study identifier
+      '1_ID',                  # Study-level identifier
+      '1.1_CaseID',            # Participant/case identifier
+      '2_Author',              # Author of the study
+      '3_Year',                # Year of publication
+      'interval',              # Time interval label (e.g., "1-2")
+      'timepoints',            # Total number of timepoints per case
+      '10_Size',               # Sample size
+      '11_Mage',               # Mean age
+      '16_CNT',                # Country code
+      '17_Eth',                # Ethnicity
+      '18_Female',             # Percentage of females
+      'Negative/Positive+LS',  # Affect type indicator: 0 = positive, 1 = negative
+      '30_Covid',              # COVID-19 era study indicator
+      '31_WBm',                # Global mean WB
+      "33_Relt1",              # Reliability of T1 measurement
+      "34_Relt",               # Reliability of T2 measurement
+
+      # Repeated measures across sequential intervals: means, SDs, timelags, and correlations
+
+      # Interval 1-2
+      '38_WBmt1', '39_WBsdt1', '40_WBmt2', '41_WBsdt2', '45_WBt1t2', '46_WBcort1t2',
+
+      # Interval 2-3
+      '51_WBmt3', '52_WBsdt3', '48_WBt2t3', '49_WBcort2t3',
+
+      # Interval 3-4
+      '53_WBmt4', '54_WBsdt4', '58_WBt3t4', '59_WBcort3t4',
+
+      # Interval 4-5
+      '64_WBmt5', '65_WBsdt5', '61_WBt4t5', '62_WBcort4t5',
+
+      # Interval 5-6
+      '66_WBmt6', '67_WBsdt6', '71_WBt5t6', '72_WBcort5t6',
+
+      # Interval 6-7
+      '77_WBmt7', '78_WBsdt7', '74_WBt6t7', '75_WBcort6t7',
+
+      # Interval 7-8
+      '79_WBmt8', '80_WBsdt8', '84_WBt7t8', '85_WBcort7t8',
+
+      # Interval 8-9
+      '90_WBmt9', '91_WBsdt9', '87_WBt8t9', '88_WBcort8t9',
+
+      # Interval 9-10
+      '92_WBmt10', '93_WBsdt10', '97_WBt9t10', '98_WBcort9t10',
+
+      # Interval 10-11
+      '103_WBmt11', '104_WBsdt11', '100_WBt10t11', '101_WBcort10t11',
+
+      # Interval 11-12
+      '105_WBmt12', '106_WBsdt12', '110_WBt11t12', '111_WBcort11t12'
+  )
+```
+
+
+```{r merge mean and SD as i and j for each Id}
+
+# Extract and Merge Interval Columns
+
+
+# Define relevant columns
+static_cols <- c("1_ID", "1.1_CaseID", "2_Author", "3_Year", "interval", "timepoints", "10_Size","11_Mage", "16_CNT", "17_Eth", "18_Female","Negative/Positive+LS", "30_Covid", "31_WBm",  "33_Relt1", "34_Relt")
+
+
+# Create list to store output rows
+merged_rows <- list()
+
+# Loop through rows in long_format
+for (i in 1:nrow(long_format)) {
+  row <- long_format[i, ]
+
+  # Extract interval and parse i-j
+  interval <- row$interval
+  split <- str_split(interval, "-")[[1]]
+  i_tp <- as.integer(split[1])
+  j_tp <- as.integer(split[2])
+
+  # Construct column names based on interval values
+  WBmi_col <- grep(paste0("_WBmt", i_tp, "$"), names(row), value = TRUE)
+  WBsdi_col <- grep(paste0("_WBsdt", i_tp, "$"), names(row), value = TRUE)
+  WBmj_col <- grep(paste0("_WBmt", j_tp, "$"), names(row), value = TRUE)
+  WBsdj_col <- grep(paste0("_WBsdt", j_tp, "$"), names(row), value = TRUE)
+  WBcorr_col <- grep(paste0("_WBcort", i_tp, "t", j_tp, "$"), names(row), value = TRUE)
+  WBt_col <- grep(paste0("_WBt", i_tp, "t", j_tp, "$"), names(row), value = TRUE)
+
+  # Create compact row
+  merged <- row[static_cols]
+  merged$WBmi <- if (length(WBmi_col)) row[[WBmi_col]] else NA
+  merged$WBsdi <- if (length(WBsdi_col)) row[[WBsdi_col]] else NA
+  merged$WBmj <- if (length(WBmj_col)) row[[WBmj_col]] else NA
+  merged$WBsdj <- if (length(WBsdj_col)) row[[WBsdj_col]] else NA
+  merged$WBcorrij <- if (length(WBcorr_col)) row[[WBcorr_col]] else NA
+  merged$WBtitj <- if (length(WBt_col)) row[[WBt_col]] else NA
+
+  merged_rows[[length(merged_rows) + 1]] <- merged
+}
+
+# Combine all into final merged format
+long_format_merged <- bind_rows(merged_rows)
+
+# Preview the first few rows
+head(long_format_merged)
+```
+
+
+```{r Merge the Long format columns}
+# Step 1: Convert WBcorrij to numeric (if not already)
+# This ensures that the WBcorrij column is treated as numeric for calculations (e.g., computing mean).
+long_format_merged$WBcorrij <- as.numeric(long_format_merged$WBcorrij)
+
+# Step 2: Compute mean of valid (non-NA and not equal to 9999) correlation values
+# Remove rows with missing or placeholder (9999) values before calculating the mean correlation
+valid_corrs <- long_format_merged$WBcorrij[!is.na(long_format_merged$WBcorrij) & long_format_merged$WBcorrij != 9999]
+
+# Calculate the mean of the valid correlation values (ignoring any NA just in case)
+mean_corr <- mean(valid_corrs, na.rm = TRUE)
+
+# Step 3: Create a new dataframe and replace missing/invalid WBcorrij values with the mean
+# Make a copy of the dataset to store cleaned correlation values
+long_format_merged_corr <- long_format_merged
+
+# Replace NA or 9999 in WBcorrij with the computed mean; keep the original value otherwise
+long_format_merged_corr$WBcorrij <- ifelse(
+  is.na(long_format_merged$WBcorrij) | long_format_merged$WBcorrij == 9999,
+  mean_corr,  # Replace with mean
+  long_format_merged$WBcorrij       # Keep original if valid
+)
+
+# Display the first few rows of the cleaned dataset for inspection
+head(long_format_merged_corr)
+```
+
+
+```{r Computing Mean Change}
+# Compute standardized mean change (dr)
+long_format_merged_corr <- long_format_merged_corr %>%
+  mutate(
+    dr = ifelse(!is.na(WBmi) & !is.na(WBmj) & !is.na(WBsdi) & WBsdi != 0,
+                (WBmj - WBmi) / WBsdi,
+                NA_real_)
+  )
+
+# View the added Dr column
+head(long_format_merged_corr)
+
+# Save file with all the columns
+write.xlsx(long_format_merged, "output/long_format_with_newcol.xlsx", rowNames = FALSE)
+cat("Final long-format Excel written successfully with original column names intact.")
+
+```
+
+```{r Installing Packages for Meta Analysis}
+# install metafor package
+#install.packages(”metafor”)
+#install.packages("matrix")
+
+# install.packages("remotes")
+#remotes::install_github("wviechtb/metafor")
+
+# load metafor package
+library(metafor)
+```
+
+
+```{r Meta-Analysis of Longitudinal Studies}
+
+# Make sure your data is in the proper format
+dat_meta <- long_format_merged_corr %>%
+  rename(
+    mean1 = WBmi,         # baseline mean
+    mean2 = WBmj,         # follow-up mean
+    sd1   = WBsdi,        # baseline SD
+    n     =`10_Size`,     # sample size
+    r     = WBcorrij,     # correlation  # r = WBcorrij
+    study = `1_ID`        # unique ID for study/case
+  ) %>%
+  mutate(
+    n = suppressWarnings(as.numeric(n))  # convert n into numeric for calculations
+  )
+
+
+# Calculate standardized mean change with raw score standardization
+#dat_meta_escalc <- escalc(
+#  measure = "SMCR",
+#  m1i = mean2,      # follow-up mean
+#  m2i = mean1,      # baseline mean
+ # sd1i = sd1,       # baseline SD
+#  ni = n,           # sample size
+#  ri = r,           # correlation
+##  data = dat_meta,
+#  slab = study      # study label
+#)
+
+#head(dat_meta_escalc)
+```
+
+```{r Random Effect Model}
+# Fit a random-effects meta-analysis model using the metafor::rma function
+# yi = effect size estimates (e.g., standardized mean changes)
+# vi = corresponding sampling variances for each effect size
+# data = the dataset containing yi and vi (here: dat_meta_complete, assumed pre-cleaned)
+res <- rma(yi, vi, data = dat_meta_complete)
+
+# Display the summary results of the fitted random-effects model
+# This includes the estimated overall effect size, confidence interval, heterogeneity statistics, etc.
+res
+```
+
+```{r Random Effect Model Examining Result}
+# fit random-effects model and examine results
+# Filter out rows with missing yi or vi
+dat_meta_complete <- dat_meta_escalc %>%
+  filter(!is.na(yi) & !is.na(vi))
+
+res <- rma(yi, vi, data=dat_meta_complete)
+res
+```
+
+```{r updating plots view}
+
+# Create forest and funnel plots side-by-side with better labeling
+par(mfrow = c(1, 2))  # Layout for side-by-side plots
+
+# Forest Plot
+forest(res,
+       xlab = "Standardized Mean Change (d)",         # X-axis label
+       slab = dat_meta_complete$study,                 # Study labels
+       mlab = "Pooled Effect (RE Model)",             # Summary label
+       main = "Forest Plot of Effect Sizes")          # Main title
+
+# Funnel Plot
+funnel(res,
+       xlab = "Standardized Mean Change (d)",         # X-axis
+       ylab = "Standard Error",                       # Y-axis
+       main = "Funnel Plot (Publication Bias)",     # Main title
+       col = "black", pch = 19, bg = "lightgray")     # Aesthetic tweaks
+
+
+```
+
+
+```{r Lollipop graph}
+# Load libraries
+library(metafor)
+library(ggplot2)
+library(dplyr)
+```
+
+
+```{r Lollipop graph step 2}
+res_df <- dat_meta_complete %>%
+  mutate(
+    # Compute standard error of the effect size (SEi = sqrt of variance)
+    sei = sqrt(vi),
+    
+    # Compute Z-scores by standardizing effect sizes:
+    # Subtract the mean and divide by standard deviation of yi
+    z = (yi - mean(yi, na.rm = TRUE)) / sd(yi, na.rm = TRUE)
+  ) %>%
+  
+  # Arrange rows in ascending order of Z-score (for plotting or inspection)
+  arrange(z) %>%
+  
+  # Convert study column to a factor with levels ordered by appearance (preserves plot order)
+  mutate(study = factor(study, levels = unique(study)))
+
+```
+
+```{r Lollipop graph step 2}
+# Display the internal structure of the variable 'v_d' in the dataset 'dat_meta_complete'
+# This shows type, length, and some example values
+str(dat_meta_complete$v_d)
+
+# Create a new data frame named 'res'
+res <- data.frame(
+  # Column 'study' copied directly from the original dataset
+  study = dat_meta_complete$study,
+  
+  # Column 'yi' created from the effect size estimates (here, Cohen's d values)
+  yi = dat_meta_complete$es_d,
+  
+  # Column 'sei' is the standard error of the effect size,
+  # calculated as the square root of its variance 'v_d'
+  sei = sqrt(dat_meta_complete$v_d)
+)
+
+```
+
+
+```{r Plotting Lollipop graph}
+# Step 3: Plot diverging lollipop chart
+ggplot(res_df, aes(x = study, y = z, label = round(z, 2))) +   # Initialize ggplot with 'study' on x-axis, 'z' (z-scores) on y-axis, and text labels (rounded)
+  geom_point(stat = 'identity', size = 4, color = "black") +   # Add black points for each study (the lollipop "head")
+  geom_segment(aes(xend = study, y = 0, yend = z), color = "black") +   # Draw vertical line segments from 0 to the z-score (the lollipop "stick")
+  geom_text(color = "white", size = 3, hjust = ifelse(res_df$z > 0, 1.2, -0.2)) +  # Add white text labels on each point, adjust text position depending on sign of z
+  labs(
+    title = "Diverging Lollipop Chart",                       # Main title of the chart
+    subtitle = "Standardized Effect Sizes (Z-scores)",        # Subtitle
+    y = "Z-score",                                            # Y-axis label
+    x = NULL                                                  # Remove x-axis label (studies serve as labels)
+  ) +
+  coord_flip() +   # Flip coordinates to make it horizontal (studies on y-axis, z-scores along x-axis)
+  theme_bw()       # Use a clean black-and-white theme
+```
+
+
+```{r}
+facet_wrap(~ factor2, scales = "free_y")   # Split the plot into separate panels (facets) by the variable 'factor2'.
+                                           # Each unique value of 'factor2' gets its own subplot.
+                                           # 'scales = "free_y"' allows the y-axis to vary independently
+                                           # in each facet, making labels and patterns clearer even if
+                                           # groups have different numbers of studies or ranges of values.
+```
+
+
+```{r interactive plots}
+# install.packages("meta")
+library(meta)
+
+# convert to meta format
+meta_obj <- metagen(TE = yi, seTE = sqrt(vi), studlab = dat_meta_escalc$`1_ID`, data = dat_meta_escalc)
+
+# interactive forest plot
+meta::forest(meta_obj, interactive = TRUE)
+
+```
+
+
+```{r Removing some rows from data display}
+# Drop rows with NA in required columns BEFORE fitting model and creating slab
+dat_meta_escalc_clean <- dat_meta_escalc %>% 
+  filter(!is.na(yi) & !is.na(vi))   # Keep only rows where effect size (yi) and variance (vi) are not missing
+
+# Fit model
+res <- rma(yi, vi, data = dat_meta_escalc_clean)   # Fit a random-effects meta-analysis model using metafor::rma()
+
+# Now create slab of correct length
+slab_labels <- paste0("ID", dat_meta_escalc_clean$`study`)   # Create study labels (slabs), one per study, prefixed with "ID"
+
+# Plot
+forest(res,                                    # Generate forest plot from the fitted model
+       xlab = "Standardized Mean Change (d)",  # Label for x-axis
+       slab = slab_labels,                     # Use custom study labels defined above
+       order = order(dat_meta_escalc_clean$`X3_Year`),  # Sort studies in the plot by publication year
+       mlab = "Pooled Effect (RE Model)",      # Label for pooled (meta-analytic) effect size
+       main = "Forest Plot Sorted by Year",    # Main title of the forest plot
+       cex = 0.6)                              # Reduce text size for better readability
+
+```
+
+
+```{r Forest Plot based on Year}
+# Sort your dataset by year (for '3_Year' is the column)
+dat_meta_escalc <- dat_meta_escalc[order(long_format_merged_corr$`3_Year`), ]
+
+# Define colors by subgroup (timepoints)
+subgroup_colors <- as.numeric(as.factor(long_format_merged_corr$timepoints))
+
+
+# Refit the model (optional if already fitted)
+res <- rma(yi, vi, data = dat_meta_escalc)
+
+# Plot side by side
+par(mfrow = c(1, 2))
+
+# Forest Plot: sorted, with subgroup labels
+forest(res,
+       xlab = "Standardized Mean Change (d)",
+       slab = paste0(dat_meta_escalc$`1_ID`, " (", long_format_merged_corr$`3_Year`, ")"),
+       order = order(long_format_merged_corr$`3_Year`),
+       mlab = "Pooled Effect (RE Model)",
+       main = "Forest Plot Sorted by Year")
+
+# Add vertical line at 0
+abline(v = 0, col = "gray60", lty = 2)
+
+#  Funnel Plot: color-coded by timepoints
+funnel(res,
+       xlab = "Standardized Mean Change (d)",
+       ylab = "Standard Error",
+       main = "Funnel Plot by Timepoints",
+       pch = 21, bg = subgroup_colors)
+
+# Add vertical line at pooled estimate
+abline(v = res$b, col = "blue", lwd = 2)
+abline(v = 0, col = "gray60", lty = 2)
+
+```
+
+# Random mean level change similar to Narcisism
+# res <- rma.mv(yi=es_dyear, V=v_dyear, random = ~ 1 | sampid/caseid, data=dat.agentic)
+
+#yi=es_dyear: the effect size (standardized mean change per year).
+
+#V=v_dyear: sampling variance of each effect size.
+
+#random = ~ 1 | sampid/caseid: specifies random effects for nested structure:
+
+#sampid = study ID (between-study variability),
+
+#caseid = case/participant ID (within-study variability).
+
+#data=dat.agentic: uses the agentic personality trait data.
+
+#sum(dat.agentic.es_dyear.sample$n): total sample size across studies.
+
+
+
+```{r split years in different chunks by 25 to see forest plot better}
+library(metafor)
+
+# Split into chunks of 25
+n <- nrow(dat_meta_escalc_clean)
+chunk_size <- 25
+chunks <- split(1:n, ceiling(seq_along(1:n) / chunk_size))
+
+# Loop through each chunk
+for (i in seq_along(chunks)) {
+  rows <- chunks[[i]]
+  chunk_data <- dat_meta_escalc_clean[rows, ]  # Get the rows for this chunk
+
+  # Fit rma using formula interface with proper subsetting
+  res_chunk <- rma(yi ~ 1, vi = vi, data = chunk_data)
+
+  # Create labels matching the length of the chunk
+  slab_labels <- paste0(chunk_data$`1_ID`, " (", chunk_data$`X3_Year`, ")")
+
+  # Plot forest
+  forest(res_chunk,
+         xlab = "Standardized Mean Change (d)",
+         slab = slab_labels,
+         main = paste("Forest Plot Chunk", i),
+         mlab = "Pooled Effect (RE Model)",
+         cex = 0.6)
+
+  abline(v = 0, col = "gray60", lty = 2)
+}
+
+```
+
+
+```{r Mean level change}
+library(metafor)
+
+library(dplyr)
+
+
+# Step 1: Add row index to both data frames
+dat_meta_escalc <- dat_meta_escalc %>%
+  mutate(row_id = row_number())
+
+long_format_merged_corr <- long_format_merged_corr %>%
+  mutate(row_id = row_number())
+
+# Step 2: Join 1.1_CaseID from long_format_merged_corr
+dat_meta_escalc <- left_join(
+  dat_meta_escalc,
+  long_format_merged_corr %>% select(row_id, `1.1_CaseID`),
+  by = "row_id"
+)
+
+# Step 3: Create required variables and clean NAs
+dat_meta_escalc_clean <- dat_meta_escalc %>%
+  mutate(
+    es_dyear = yi / timepoints,             # standardized yearly effect size
+    v_dyear  = vi / (timepoints^2),         # scaled variance
+    sampid   = as.factor(study),
+    caseid   = as.factor(`X1.1_CaseID`)
+  ) %>%
+  filter(!is.na(es_dyear) & !is.na(v_dyear) & !is.na(caseid) & !is.na(sampid)) %>%
+  droplevels()
+
+# Step 4: Run multilevel meta-analysis model
+res_mean_change <- rma.mv(
+  yi = es_dyear,
+  V  = v_dyear,
+  random = ~ 1 | caseid / sampid,
+  data = dat_meta_escalc_clean,
+  method = "REML"
+)
+
+# Step 5: Output results
+print(res_mean_change, digits = 3)
+
+# Optional: total sample size used
+sum(dat_meta_escalc_clean$n, na.rm = TRUE)
+
+```
+
+# Robust Variance Estimation (by notes)
+
+```{r Installing Robumeta Package}
+
+#install.packages("robumeta")
+library(robumeta)
+
+```
+
+# Now we need
+# g: effect size (like yi or es_dyear)
+# Var.g: corresponding sampling variance (like vi or v_dyear)
+# IDCOUNTRY: study-level ID (i.e., study or 1_ID)
+
+
+```{r Data Preparation}
+# Prepare data (assuming you already calculated es_dyear and v_dyear)
+dat_rve <- dat_meta_escalc %>%
+  mutate(
+    g = es_dyear,             # Effect size
+    Var.g = v_dyear,          # Variance of effect size
+    IDCOUNTRY = study         # Grouping variable (e.g., study ID)
+  )
+
+# View Data in Table format
+head(dat_rve)
+```
+# What it means: 
+# Rho = 0.5: assumed average correlation between effect sizes from the same study
+# I² = 97.07: percentage of variability due to heterogeneity (not sampling error)
+# Tau² = 0.0027: between-study variance
+# Estimate (β₀ = -0.0177	): overall effect (intercept)
+# t-value / p-value: -3.28: statistical significance
+# CI (95%): confidence interval around the effect size
+# by changing rho = 0.6, 0.8, etc., we can check sensitivity to within-study correlation assumptions.
+
+```{r Run RVE Model }
+
+# Checking  Representative Volume Element Model 
+RVEce.study <- robu(
+  formula = g ~ 1,                      # Intercept-only model
+  data = dat_rve,
+  studynum = IDCOUNTRY,                # Study-level clustering
+  var.eff.size = Var.g,                # Variance of effect size
+  small = FALSE,                       # No small-sample correction
+  modelweights = "CORR",               # Correlated effects model
+  rho = 0.5                            # Assumed correlation between outcomes
+)
+print(RVEce.study, digits = 3)
+
+
+```
+
+
+```{r Sensitivity Analysis}
+# Perform sensitivity analysis on the fitted Robust Variance Estimation (RVE) model
+# 'RVEce.study' is the meta-analysis model object created earlier using clubSandwich::robust()
+# The sensitivity() function checks how sensitive the model results are to assumptions
+# about within-study effect size dependence and small-sample corrections.
+# This helps to assess robustness of conclusions against different modeling choices.
+sensitivity(RVEce.study)
+```
+
+
+```{r Hierarchical Effects}
+
+# Run RVE model assuming hierarchical (nested) structure
+rve_hierarchical <- robu(
+  formula = g ~ 1,                      # Effect size model (intercept-only)
+  data = dat_rve,                       # Your dataset with effect sizes
+  studynum = IDCOUNTRY,                 # Clustering variable (e.g., country ID)
+  var.eff.size = Var.g,                 # Sampling variance of g
+  small = FALSE,                        # Don't apply small sample correction
+  modelweights = "HIER"                 # Hierarchical weights (nested)
+)
+
+# Print model summary
+print(rve_hierarchical)
+
+```
+
+# Parameter: 	Meaning
+# g ~ 1	Intercept-only model (no moderators)
+# data = dat_rve dataset (must contain g, Var.g, IDCOUNTRY)
+# studiynum	Tells robu() which grouping variable to use for clustering
+# var.eff.size	Variance of each effect size (sampling variance)
+# modelweights	"HIER" instructs it to assume a hierarchical model
+# small = FALSE	Disables small-sample correction
+
+# Output here:
+# Omega²: Between-cluster variance (e.g., differences between all studies)
+# Tau²: Within-cluster variance (e.g., variability across effect sizes per study)
+# CI, t-values, p-values for the overall mean effect
+
+```{r Random-effects model}
+library(metafor)
+library(dplyr)
+
+# Step 1: Clean the data
+dat_meta_escalc_clean <- dat_meta_escalc %>%
+  filter(!is.na(yi) & !is.na(vi) & !is.na(study)) %>%  # Remove rows with NA in any required column
+  mutate(study = as.factor(study)) %>%                # Convert study to factor (recommended)
+  droplevels()
+
+# Step 2: Fit the Random-Effects Model (REM)
+REM <- rma.mv(
+  yi = yi,
+  V = vi,
+  random = ~ 1 | study,         # Random intercept for each study
+  data = dat_meta_escalc_clean
+)
+
+summary(REM)   # Show REM results
+
+# Step 3: Fit the Fixed-Effects Model (FEM)
+FEM <- rma.mv(
+  yi = yi,
+  V = vi,
+  random = ~ 1 | study,         # Random structure still specified
+  sigma2 = 0,                   # Force between-study variance to 0
+  method = "REML",
+  data = dat_meta_escalc_clean
+)
+
+summary(FEM)   # Show FEM results
+
+# Step 4: Compare the models
+anova(FEM, REM)
+
+
+```
+# REM: Estimates between-study variance (τ²) → tests for heterogeneity.
+# FEM: Forces τ² = 0 → assumes no heterogeneity.
+# Comparing both models (e.g., via logLik, AIC, etc.) lets you assess whether heterogeneity exists.
+# In summary(FEM) check sigma^2 = 0 and the test for heterogeneity: Q-test and its p-value.
+
+# Log-Likelihood Values (LogLik)
+#Full: -2426.36
+#Reduced: -5116.72
+
+#Interpretation: The Full model fits the data much better (higher log-likelihood) than the Reduced model.
+
+#AIC / BIC / AICc
+#Lower values of AIC, BIC, and AICc indicate better model fit.
+#Full model: AIC = 4856.72
+#Reduced model: AIC = 10235.43
+
+# Likelihood Ratio Test (LRT / χ²)
+# LRT = 5380.7150, p < .0001
+# This tests whether the additional parameter(s) in the full model significantly improve the model fit.
+#Since p-value < 0.0001 → Full model is significantly better than the reduced model.
+
+#df (Degrees of Freedom)
+#Full model has 2 df, Reduced model has 1 df
+#Likely, the Full model adds one more parameter (e.g., a random effect or variance component) over the Reduced model.
+
+
+
