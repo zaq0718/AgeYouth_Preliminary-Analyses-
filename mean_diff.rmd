@@ -1,0 +1,541 @@
+<<<<<<< HEAD
+---
+title: "Mean differences analysis"
+author: "Prerana Chandratre"
+output: html_notebook
+---
+
+```{r Load libraries and prepare input data}
+
+# Load required libraries
+library(openxlsx)  # For reading/writing Excel files
+library(dplyr)     # For data manipulation
+library(tidyr)     # For data reshaping (not used here but good for pipelines)
+library(stringr)   # For string processing
+
+# Define file paths
+file_path <- "data/included_studies_1-13.xlsx"       # Path to input Excel file
+output_path <- "output/mean_diff.xlsx"               # Path for saving final output
+
+# Read the Excel file, starting from the 2nd row (assumes row 1 contains metadata or notes)
+data <- read.xlsx(file_path, startRow = 2)
+
+# Define a custom function to clean messy column names
+clean_names <- function(x) {
+  x <- gsub('["]', "", x)              # Remove any quote marks
+  x <- gsub("&#10;?", "", x)           # Remove HTML line breaks
+  x <- gsub("[\r\n]", "", x)           # Remove newline characters
+  x <- trimws(x)                       # Remove leading/trailing spaces
+  x <- gsub("\\s+", "", x)             # Remove any remaining internal whitespace
+  return(x)
+}
+
+# Apply the cleaning function to all column names
+names(data) <- clean_names(names(data))
+```
+
+
+```{r  Define the static metadata columns that should always be kept in final output}
+
+# These include identifiers and key study-level information
+keep_static <- c("0_IDF", "1_ID", "1.1_CaseID", "2_Author", "3_Year", "29_WbPoint")
+
+# Find all columns that follow the pattern "_WBmtX" where X is a number (e.g., "_WBmt1", "_WBmt2", ...)
+# These are assumed to represent repeated measures over time
+wbmt_cols <- grep("_WBmt\\d+$", names(data), value = TRUE)
+
+# Define a helper function to extract the numeric time index from each WBmt column
+# For example: from "38_WBmt1" it extracts 1
+extract_index <- function(col) {
+  as.numeric(str_extract(col, "(?<=_WBmt)\\d+"))  # Use regex to extract the digits after "_WBmt"
+}
+
+# Sort the WBmt columns based on their numeric time indices
+# This ensures the columns are processed in chronological order
+wbmt_cols <- wbmt_cols[order(sapply(wbmt_cols, extract_index))]
+```
+
+```{r Compute Difference and Pattern Columns for Consecutive Time Points}
+
+# Initialize empty vectors to store the names of all generated diff and pattern columns
+diff_cols <- c()      # To store names like "diff_col1_col2"
+pattern_cols <- c()   # To store names like "pattern_col1_col2"
+
+# Loop through each pair of consecutive WBmt columns
+for (i in 1:(length(wbmt_cols) - 1)) {
+  
+  # Get the current column (time t) and the next column (time t+1)
+  col1 <- wbmt_cols[i]
+  col2 <- wbmt_cols[i + 1]
+
+  # Define names for the new columns: one for difference and one for the pattern
+  diff_name <- paste0("diff_", col1, "_", col2)
+  pattern_name <- paste0("pattern_", col1, "_", col2)
+
+  # Calculate the difference between time t+1 and time t, and store it in the new column
+  data[[diff_name]] <- as.numeric(data[[col2]]) - as.numeric(data[[col1]])
+
+  # Assign a pattern label based on the direction of change:
+  # - "I" for increase
+  # - "D" for decrease
+  # - NA for no change or missing values
+  data[[pattern_name]] <- ifelse(is.na(data[[diff_name]]), NA,             # If value is NA, keep NA
+                                 ifelse(data[[diff_name]] > 0, "I",        # If positive difference, label "I"
+                                        ifelse(data[[diff_name]] < 0, "D", NA)))  # If negative difference, label "D"
+
+  # Save the column names for later use (e.g., for reordering or subsetting)
+  diff_cols <- c(diff_cols, diff_name)
+  pattern_cols <- c(pattern_cols, pattern_name)
+}
+```
+
+
+```{r Reorder Columns and Subset Final Dataset }
+
+# Define the desired column order:
+# - Static columns (e.g., ID, Author, Year)
+# - Time-based WBmt columns (e.g., repeated measurements)
+# - Calculated difference columns (e.g., change scores between timepoints)
+# - Calculated pattern columns (e.g., "I", "D", or NA for change direction)
+final_col_order <- c(keep_static, wbmt_cols, diff_cols, pattern_cols)
+
+# Subset the original data using only the columns that exist in both the desired list and actual data
+# This prevents errors if some expected columns are missing
+# drop = FALSE keeps the result as a data frame even if only one column is selected
+data_diff_pattern <- data[, intersect(final_col_order, names(data)), drop = FALSE]
+
+```
+
+```{r Combine All Pattern Columns into One Summary Column}
+
+# Identify all columns whose names start with "pattern_"
+# This ensures that even if the variable `pattern_cols` was lost, we can still retrieve all relevant columns
+pattern_cols <- grep("^pattern_", names(data), value = TRUE)
+
+# Create a new column called 'pattern_summary' that summarizes the entire change pattern for each row
+# For each row:
+# - Select all pattern values (e.g., "I", "D", NA)
+# - Remove any NA values
+# - Concatenate the remaining values into a single string (e.g., "IDDI")
+data$pattern_summary <- apply(data[, pattern_cols], 1, function(row) {
+  paste(na.omit(row), collapse = "")  # Combine non-NA pattern labels into one string per row
+})
+
+```
+
+```{r Prepare Final Data Frame with Summary Column for Output or Analysis}
+
+# Define the complete column order:
+# - Static study info (e.g., IDs, authorship, year)
+# - WBmt timepoint values
+# - Computed differences between timepoints
+# - Directional pattern labels ("I", "D", NA)
+# - Combined pattern summary string across all timepoints
+final_col_order <- c(keep_static, wbmt_cols, diff_cols, pattern_cols, "pattern_summary")
+
+# Subset the full dataset to include only those columns that:
+# - Match the defined order
+# - Actually exist in the current dataset
+# 'intersect' ensures we avoid any non-existent columns
+# drop = FALSE keeps result as data frame even if only one column is selected
+data_diff_pattern <- data[, intersect(final_col_order, names(data)), drop = FALSE]
+
+```
+
+```{r remove repeated columns}
+
+# Define the column names to remove (put all names you want to ignore)
+cols_to_ignore <- c(
+  "diff_38_WBmt1_diff_38_WBmt1_40_WBmt2",
+  "diff_diff_38_WBmt1_40_WBmt2_pattern_38_WBmt1_40_WBmt2",
+  "diff_pattern_38_WBmt1_40_WBmt2_40_WBmt2",
+  "diff_40_WBmt2_diff_40_WBmt2_51_WBmt3",
+  "diff_diff_40_WBmt2_51_WBmt3_pattern_40_WBmt2_51_WBmt3",
+  "diff_pattern_40_WBmt2_51_WBmt3_51_WBmt3",                        
+  "diff_51_WBmt3_diff_51_WBmt3_53_WBmt4",                            
+  "diff_diff_51_WBmt3_53_WBmt4_pattern_51_WBmt3_53_WBmt4",          
+  "diff_pattern_51_WBmt3_53_WBmt4_53_WBmt4",                        
+  "diff_53_WBmt4_diff_53_WBmt4_64_WBmt5",                           
+  "diff_diff_53_WBmt4_64_WBmt5_pattern_53_WBmt4_64_WBmt5",           
+  "diff_pattern_53_WBmt4_64_WBmt5_64_WBmt5",                         
+  "diff_64_WBmt5_diff_64_WBmt5_66_WBmt6",                            
+  "diff_diff_64_WBmt5_66_WBmt6_pattern_64_WBmt5_66_WBmt6",           
+  "diff_pattern_64_WBmt5_66_WBmt6_66_WBmt6",                         
+  "diff_66_WBmt6_diff_66_WBmt6_77_WBmt7",                            
+  "diff_diff_66_WBmt6_77_WBmt7_pattern_66_WBmt6_77_WBmt7",           
+  "diff_pattern_66_WBmt6_77_WBmt7_77_WBmt7",                         
+  "diff_77_WBmt7_diff_77_WBmt7_79_WBmt8",                            
+  "diff_diff_77_WBmt7_79_WBmt8_pattern_77_WBmt7_79_WBmt8",           
+  "diff_pattern_77_WBmt7_79_WBmt8_79_WBmt8",                         
+   "diff_79_WBmt8_diff_79_WBmt8_90_WBmt9",                            
+  "diff_diff_79_WBmt8_90_WBmt9_pattern_79_WBmt8_90_WBmt9" ,          
+  "diff_pattern_79_WBmt8_90_WBmt9_90_WBmt9",                         
+  "diff_90_WBmt9_diff_90_WBmt9_92_WBmt10",                           
+  "diff_diff_90_WBmt9_92_WBmt10_pattern_90_WBmt9_92_WBmt10",         
+  "diff_pattern_90_WBmt9_92_WBmt10_92_WBmt10",                       
+  "diff_92_WBmt10_diff_92_WBmt10_103_WBmt11",                        
+  "diff_diff_92_WBmt10_103_WBmt11_pattern_92_WBmt10_103_WBmt11",     
+  "diff_pattern_92_WBmt10_103_WBmt11_103_WBmt11",                    
+  "diff_103_WBmt11_diff_103_WBmt11_105_WBmt12",                      
+  "diff_diff_103_WBmt11_105_WBmt12_pattern_103_WBmt11_105_WBmt12",   
+  "diff_pattern_103_WBmt11_105_WBmt12_105_WBmt12",                   
+  "pattern_38_WBmt1_diff_38_WBmt1_40_WBmt2",                         
+  "pattern_diff_38_WBmt1_40_WBmt2_pattern_38_WBmt1_40_WBmt2",        
+  "pattern_pattern_38_WBmt1_40_WBmt2_40_WBmt2",                      
+  "pattern_40_WBmt2_diff_40_WBmt2_51_WBmt3",                         
+  "pattern_diff_40_WBmt2_51_WBmt3_pattern_40_WBmt2_51_WBmt3",        
+  "pattern_pattern_40_WBmt2_51_WBmt3_51_WBmt3",                      
+  "pattern_51_WBmt3_diff_51_WBmt3_53_WBmt4",                         
+  "pattern_diff_51_WBmt3_53_WBmt4_pattern_51_WBmt3_53_WBmt4",        
+  "pattern_pattern_51_WBmt3_53_WBmt4_53_WBmt4",                      
+  "pattern_53_WBmt4_diff_53_WBmt4_64_WBmt5",                         
+  "pattern_diff_53_WBmt4_64_WBmt5_pattern_53_WBmt4_64_WBmt5" ,       
+  "pattern_pattern_53_WBmt4_64_WBmt5_64_WBmt5",                      
+  "pattern_64_WBmt5_diff_64_WBmt5_66_WBmt6",                         
+  "pattern_diff_64_WBmt5_66_WBmt6_pattern_64_WBmt5_66_WBmt6",        
+  "pattern_pattern_64_WBmt5_66_WBmt6_66_WBmt6",                      
+  "pattern_66_WBmt6_diff_66_WBmt6_77_WBmt7",                         
+  "pattern_diff_66_WBmt6_77_WBmt7_pattern_66_WBmt6_77_WBmt7",        
+  "pattern_pattern_66_WBmt6_77_WBmt7_77_WBmt7",                      
+  "pattern_77_WBmt7_diff_77_WBmt7_79_WBmt8",                         
+  "pattern_diff_77_WBmt7_79_WBmt8_pattern_77_WBmt7_79_WBmt8",        
+  "pattern_pattern_77_WBmt7_79_WBmt8_79_WBmt8",                      
+  "pattern_79_WBmt8_diff_79_WBmt8_90_WBmt9",                         
+  "pattern_diff_79_WBmt8_90_WBmt9_pattern_79_WBmt8_90_WBmt9",        
+  "pattern_pattern_79_WBmt8_90_WBmt9_90_WBmt9",                      
+  "pattern_90_WBmt9_diff_90_WBmt9_92_WBmt10",                        
+  "pattern_diff_90_WBmt9_92_WBmt10_pattern_90_WBmt9_92_WBmt10",      
+  "pattern_pattern_90_WBmt9_92_WBmt10_92_WBmt10",                    
+  "pattern_92_WBmt10_diff_92_WBmt10_103_WBmt11",                     
+  "pattern_diff_92_WBmt10_103_WBmt11_pattern_92_WBmt10_103_WBmt11",  
+  "pattern_pattern_92_WBmt10_103_WBmt11_103_WBmt11",                 
+  "pattern_103_WBmt11_diff_103_WBmt11_105_WBmt12",                   
+  "pattern_diff_103_WBmt11_105_WBmt12_pattern_103_WBmt11_105_WBmt12",
+  "pattern_pattern_103_WBmt11_105_WBmt12_105_WBmt12"
+)
+
+# Step 2: Drop these columns from your data
+data_cleaned <- data_diff_pattern[, setdiff(names(data_diff_pattern), cols_to_ignore), drop = FALSE]
+```
+
+
+```{r Check the cleaned dataset}
+print(data_cleaned)
+```
+
+```{r Reorder Dataset Using a Manually Defined Column Sequence}
+
+# Define a manual column order to control the structure of the final output explicitly
+# This allows for precise control over how timepoints, differences, and patterns are arranged
+# The order is based on logical progression from baseline to follow-up assessments
+manual_col_order <- c(
+  "0_IDF", "1_ID", "1.1_CaseID", "2_Author", "3_Year", "29_WbPoint",        # Study metadata
+  "38_WBmt1",                                                              # Timepoint 1
+  "40_WBmt2", "diff_38_WBmt1_40_WBmt2", "pattern_38_WBmt1_40_WBmt2",       # T1→T2
+  "51_WBmt3", "diff_40_WBmt2_51_WBmt3", "pattern_40_WBmt2_51_WBmt3",       # T2→T3
+  "53_WBmt4", "diff_51_WBmt3_53_WBmt4", "pattern_51_WBmt3_53_WBmt4",       # T3→T4
+  "64_WBmt5", "diff_53_WBmt4_64_WBmt5", "pattern_53_WBmt4_64_WBmt5",       # T4→T5
+  "66_WBmt6", "diff_64_WBmt5_66_WBmt6", "pattern_64_WBmt5_66_WBmt6",       # T5→T6
+  "77_WBmt7", "diff_66_WBmt6_77_WBmt7", "pattern_66_WBmt6_77_WBmt7",       # T6→T7
+  "79_WBmt8", "diff_77_WBmt7_79_WBmt8", "pattern_77_WBmt7_79_WBmt8",       # T7→T8
+  "90_WBmt9", "diff_77_WBmt8_79_WBmt9", "pattern_79_WBmt8_90_WBmt9",       # T8→T9
+  "92_WBmt10", "diff_90_WBmt9_92_WBmt10", "pattern_90_WBmt9_92_WBmt10",    # T9→T10
+  "103_WBmt11", "diff_92_WBmt10_103_WBmt11", "pattern_92_WBmt10_103_WBmt11", # T10→T11
+  "105_WBmt12", "diff_103_WBmt11_105_WBmt12", "pattern_103_WBmt11_105_WBmt12", # T11→T12
+  "pattern_summary"                                                       # Final summarized pattern
+)
+
+# Reorder the cleaned dataset using only the columns present in both the manual list and actual data
+data_manual <- data_cleaned[, intersect(manual_col_order, names(data_cleaned)), drop = FALSE]
+
+# Replace any empty string values ("") with proper NA for consistency
+data_manual[data_manual == ""] <- NA
+```
+
+
+
+```{r Export Final Processed Data to Excel}
+
+# Write the manually ordered dataset (with diff and pattern columns) to an Excel file
+# - Uses the "openxlsx" package
+# - Saves the file to the defined path
+# - rowNames = FALSE ensures that row numbers are not written as a separate column
+write.xlsx(data_manual, "output/mean_diff.xlsx", rowNames = FALSE)
+
+# Print a message to the console to confirm that the file was saved successfully
+cat(" File with mean differences and patterns saved successfully.\n")
+
+```
+
+
+=======
+---
+title: "Mean differences analysis"
+author: "Prerana Chandratre"
+output: html_notebook
+---
+
+```{r Load libraries and prepare input data}
+
+# Load required libraries
+library(openxlsx)  # For reading/writing Excel files
+library(dplyr)     # For data manipulation
+library(tidyr)     # For data reshaping (not used here but good for pipelines)
+library(stringr)   # For string processing
+
+# Define file paths
+file_path <- "data/included_studies_1-13.xlsx"       # Path to input Excel file
+output_path <- "output/mean_diff.xlsx"               # Path for saving final output
+
+# Read the Excel file, starting from the 2nd row (assumes row 1 contains metadata or notes)
+data <- read.xlsx(file_path, startRow = 2)
+
+# Define a custom function to clean messy column names
+clean_names <- function(x) {
+  x <- gsub('["]', "", x)              # Remove any quote marks
+  x <- gsub("&#10;?", "", x)           # Remove HTML line breaks
+  x <- gsub("[\r\n]", "", x)           # Remove newline characters
+  x <- trimws(x)                       # Remove leading/trailing spaces
+  x <- gsub("\\s+", "", x)             # Remove any remaining internal whitespace
+  return(x)
+}
+
+# Apply the cleaning function to all column names
+names(data) <- clean_names(names(data))
+```
+
+
+```{r  Define the static metadata columns that should always be kept in final output}
+
+# These include identifiers and key study-level information
+keep_static <- c("0_IDF", "1_ID", "1.1_CaseID", "2_Author", "3_Year", "29_WbPoint")
+
+# Find all columns that follow the pattern "_WBmtX" where X is a number (e.g., "_WBmt1", "_WBmt2", ...)
+# These are assumed to represent repeated measures over time
+wbmt_cols <- grep("_WBmt\\d+$", names(data), value = TRUE)
+
+# Define a helper function to extract the numeric time index from each WBmt column
+# For example: from "38_WBmt1" it extracts 1
+extract_index <- function(col) {
+  as.numeric(str_extract(col, "(?<=_WBmt)\\d+"))  # Use regex to extract the digits after "_WBmt"
+}
+
+# Sort the WBmt columns based on their numeric time indices
+# This ensures the columns are processed in chronological order
+wbmt_cols <- wbmt_cols[order(sapply(wbmt_cols, extract_index))]
+```
+
+```{r Compute Difference and Pattern Columns for Consecutive Time Points}
+
+# Initialize empty vectors to store the names of all generated diff and pattern columns
+diff_cols <- c()      # To store names like "diff_col1_col2"
+pattern_cols <- c()   # To store names like "pattern_col1_col2"
+
+# Loop through each pair of consecutive WBmt columns
+for (i in 1:(length(wbmt_cols) - 1)) {
+  
+  # Get the current column (time t) and the next column (time t+1)
+  col1 <- wbmt_cols[i]
+  col2 <- wbmt_cols[i + 1]
+
+  # Define names for the new columns: one for difference and one for the pattern
+  diff_name <- paste0("diff_", col1, "_", col2)
+  pattern_name <- paste0("pattern_", col1, "_", col2)
+
+  # Calculate the difference between time t+1 and time t, and store it in the new column
+  data[[diff_name]] <- as.numeric(data[[col2]]) - as.numeric(data[[col1]])
+
+  # Assign a pattern label based on the direction of change:
+  # - "I" for increase
+  # - "D" for decrease
+  # - NA for no change or missing values
+  data[[pattern_name]] <- ifelse(is.na(data[[diff_name]]), NA,             # If value is NA, keep NA
+                                 ifelse(data[[diff_name]] > 0, "I",        # If positive difference, label "I"
+                                        ifelse(data[[diff_name]] < 0, "D", NA)))  # If negative difference, label "D"
+
+  # Save the column names for later use (e.g., for reordering or subsetting)
+  diff_cols <- c(diff_cols, diff_name)
+  pattern_cols <- c(pattern_cols, pattern_name)
+}
+```
+
+
+```{r Reorder Columns and Subset Final Dataset }
+
+# Define the desired column order:
+# - Static columns (e.g., ID, Author, Year)
+# - Time-based WBmt columns (e.g., repeated measurements)
+# - Calculated difference columns (e.g., change scores between timepoints)
+# - Calculated pattern columns (e.g., "I", "D", or NA for change direction)
+final_col_order <- c(keep_static, wbmt_cols, diff_cols, pattern_cols)
+
+# Subset the original data using only the columns that exist in both the desired list and actual data
+# This prevents errors if some expected columns are missing
+# drop = FALSE keeps the result as a data frame even if only one column is selected
+data_diff_pattern <- data[, intersect(final_col_order, names(data)), drop = FALSE]
+
+```
+
+```{r Combine All Pattern Columns into One Summary Column}
+
+# Identify all columns whose names start with "pattern_"
+# This ensures that even if the variable `pattern_cols` was lost, we can still retrieve all relevant columns
+pattern_cols <- grep("^pattern_", names(data), value = TRUE)
+
+# Create a new column called 'pattern_summary' that summarizes the entire change pattern for each row
+# For each row:
+# - Select all pattern values (e.g., "I", "D", NA)
+# - Remove any NA values
+# - Concatenate the remaining values into a single string (e.g., "IDDI")
+data$pattern_summary <- apply(data[, pattern_cols], 1, function(row) {
+  paste(na.omit(row), collapse = "")  # Combine non-NA pattern labels into one string per row
+})
+
+```
+
+```{r Prepare Final Data Frame with Summary Column for Output or Analysis}
+
+# Define the complete column order:
+# - Static study info (e.g., IDs, authorship, year)
+# - WBmt timepoint values
+# - Computed differences between timepoints
+# - Directional pattern labels ("I", "D", NA)
+# - Combined pattern summary string across all timepoints
+final_col_order <- c(keep_static, wbmt_cols, diff_cols, pattern_cols, "pattern_summary")
+
+# Subset the full dataset to include only those columns that:
+# - Match the defined order
+# - Actually exist in the current dataset
+# 'intersect' ensures we avoid any non-existent columns
+# drop = FALSE keeps result as data frame even if only one column is selected
+data_diff_pattern <- data[, intersect(final_col_order, names(data)), drop = FALSE]
+
+```
+
+```{r remove repeated columns}
+
+# Define the column names to remove (put all names you want to ignore)
+cols_to_ignore <- c(
+  "diff_38_WBmt1_diff_38_WBmt1_40_WBmt2",
+  "diff_diff_38_WBmt1_40_WBmt2_pattern_38_WBmt1_40_WBmt2",
+  "diff_pattern_38_WBmt1_40_WBmt2_40_WBmt2",
+  "diff_40_WBmt2_diff_40_WBmt2_51_WBmt3",
+  "diff_diff_40_WBmt2_51_WBmt3_pattern_40_WBmt2_51_WBmt3",
+  "diff_pattern_40_WBmt2_51_WBmt3_51_WBmt3",                        
+  "diff_51_WBmt3_diff_51_WBmt3_53_WBmt4",                            
+  "diff_diff_51_WBmt3_53_WBmt4_pattern_51_WBmt3_53_WBmt4",          
+  "diff_pattern_51_WBmt3_53_WBmt4_53_WBmt4",                        
+  "diff_53_WBmt4_diff_53_WBmt4_64_WBmt5",                           
+  "diff_diff_53_WBmt4_64_WBmt5_pattern_53_WBmt4_64_WBmt5",           
+  "diff_pattern_53_WBmt4_64_WBmt5_64_WBmt5",                         
+  "diff_64_WBmt5_diff_64_WBmt5_66_WBmt6",                            
+  "diff_diff_64_WBmt5_66_WBmt6_pattern_64_WBmt5_66_WBmt6",           
+  "diff_pattern_64_WBmt5_66_WBmt6_66_WBmt6",                         
+  "diff_66_WBmt6_diff_66_WBmt6_77_WBmt7",                            
+  "diff_diff_66_WBmt6_77_WBmt7_pattern_66_WBmt6_77_WBmt7",           
+  "diff_pattern_66_WBmt6_77_WBmt7_77_WBmt7",                         
+  "diff_77_WBmt7_diff_77_WBmt7_79_WBmt8",                            
+  "diff_diff_77_WBmt7_79_WBmt8_pattern_77_WBmt7_79_WBmt8",           
+  "diff_pattern_77_WBmt7_79_WBmt8_79_WBmt8",                         
+   "diff_79_WBmt8_diff_79_WBmt8_90_WBmt9",                            
+  "diff_diff_79_WBmt8_90_WBmt9_pattern_79_WBmt8_90_WBmt9" ,          
+  "diff_pattern_79_WBmt8_90_WBmt9_90_WBmt9",                         
+  "diff_90_WBmt9_diff_90_WBmt9_92_WBmt10",                           
+  "diff_diff_90_WBmt9_92_WBmt10_pattern_90_WBmt9_92_WBmt10",         
+  "diff_pattern_90_WBmt9_92_WBmt10_92_WBmt10",                       
+  "diff_92_WBmt10_diff_92_WBmt10_103_WBmt11",                        
+  "diff_diff_92_WBmt10_103_WBmt11_pattern_92_WBmt10_103_WBmt11",     
+  "diff_pattern_92_WBmt10_103_WBmt11_103_WBmt11",                    
+  "diff_103_WBmt11_diff_103_WBmt11_105_WBmt12",                      
+  "diff_diff_103_WBmt11_105_WBmt12_pattern_103_WBmt11_105_WBmt12",   
+  "diff_pattern_103_WBmt11_105_WBmt12_105_WBmt12",                   
+  "pattern_38_WBmt1_diff_38_WBmt1_40_WBmt2",                         
+  "pattern_diff_38_WBmt1_40_WBmt2_pattern_38_WBmt1_40_WBmt2",        
+  "pattern_pattern_38_WBmt1_40_WBmt2_40_WBmt2",                      
+  "pattern_40_WBmt2_diff_40_WBmt2_51_WBmt3",                         
+  "pattern_diff_40_WBmt2_51_WBmt3_pattern_40_WBmt2_51_WBmt3",        
+  "pattern_pattern_40_WBmt2_51_WBmt3_51_WBmt3",                      
+  "pattern_51_WBmt3_diff_51_WBmt3_53_WBmt4",                         
+  "pattern_diff_51_WBmt3_53_WBmt4_pattern_51_WBmt3_53_WBmt4",        
+  "pattern_pattern_51_WBmt3_53_WBmt4_53_WBmt4",                      
+  "pattern_53_WBmt4_diff_53_WBmt4_64_WBmt5",                         
+  "pattern_diff_53_WBmt4_64_WBmt5_pattern_53_WBmt4_64_WBmt5" ,       
+  "pattern_pattern_53_WBmt4_64_WBmt5_64_WBmt5",                      
+  "pattern_64_WBmt5_diff_64_WBmt5_66_WBmt6",                         
+  "pattern_diff_64_WBmt5_66_WBmt6_pattern_64_WBmt5_66_WBmt6",        
+  "pattern_pattern_64_WBmt5_66_WBmt6_66_WBmt6",                      
+  "pattern_66_WBmt6_diff_66_WBmt6_77_WBmt7",                         
+  "pattern_diff_66_WBmt6_77_WBmt7_pattern_66_WBmt6_77_WBmt7",        
+  "pattern_pattern_66_WBmt6_77_WBmt7_77_WBmt7",                      
+  "pattern_77_WBmt7_diff_77_WBmt7_79_WBmt8",                         
+  "pattern_diff_77_WBmt7_79_WBmt8_pattern_77_WBmt7_79_WBmt8",        
+  "pattern_pattern_77_WBmt7_79_WBmt8_79_WBmt8",                      
+  "pattern_79_WBmt8_diff_79_WBmt8_90_WBmt9",                         
+  "pattern_diff_79_WBmt8_90_WBmt9_pattern_79_WBmt8_90_WBmt9",        
+  "pattern_pattern_79_WBmt8_90_WBmt9_90_WBmt9",                      
+  "pattern_90_WBmt9_diff_90_WBmt9_92_WBmt10",                        
+  "pattern_diff_90_WBmt9_92_WBmt10_pattern_90_WBmt9_92_WBmt10",      
+  "pattern_pattern_90_WBmt9_92_WBmt10_92_WBmt10",                    
+  "pattern_92_WBmt10_diff_92_WBmt10_103_WBmt11",                     
+  "pattern_diff_92_WBmt10_103_WBmt11_pattern_92_WBmt10_103_WBmt11",  
+  "pattern_pattern_92_WBmt10_103_WBmt11_103_WBmt11",                 
+  "pattern_103_WBmt11_diff_103_WBmt11_105_WBmt12",                   
+  "pattern_diff_103_WBmt11_105_WBmt12_pattern_103_WBmt11_105_WBmt12",
+  "pattern_pattern_103_WBmt11_105_WBmt12_105_WBmt12"
+)
+
+# Step 2: Drop these columns from your data
+data_cleaned <- data_diff_pattern[, setdiff(names(data_diff_pattern), cols_to_ignore), drop = FALSE]
+```
+
+
+```{r Check the cleaned dataset}
+print(data_cleaned)
+```
+
+```{r Reorder Dataset Using a Manually Defined Column Sequence}
+
+# Define a manual column order to control the structure of the final output explicitly
+# This allows for precise control over how timepoints, differences, and patterns are arranged
+# The order is based on logical progression from baseline to follow-up assessments
+manual_col_order <- c(
+  "0_IDF", "1_ID", "1.1_CaseID", "2_Author", "3_Year", "29_WbPoint",        # Study metadata
+  "38_WBmt1",                                                              # Timepoint 1
+  "40_WBmt2", "diff_38_WBmt1_40_WBmt2", "pattern_38_WBmt1_40_WBmt2",       # T1→T2
+  "51_WBmt3", "diff_40_WBmt2_51_WBmt3", "pattern_40_WBmt2_51_WBmt3",       # T2→T3
+  "53_WBmt4", "diff_51_WBmt3_53_WBmt4", "pattern_51_WBmt3_53_WBmt4",       # T3→T4
+  "64_WBmt5", "diff_53_WBmt4_64_WBmt5", "pattern_53_WBmt4_64_WBmt5",       # T4→T5
+  "66_WBmt6", "diff_64_WBmt5_66_WBmt6", "pattern_64_WBmt5_66_WBmt6",       # T5→T6
+  "77_WBmt7", "diff_66_WBmt6_77_WBmt7", "pattern_66_WBmt6_77_WBmt7",       # T6→T7
+  "79_WBmt8", "diff_77_WBmt7_79_WBmt8", "pattern_77_WBmt7_79_WBmt8",       # T7→T8
+  "90_WBmt9", "diff_77_WBmt8_79_WBmt9", "pattern_79_WBmt8_90_WBmt9",       # T8→T9
+  "92_WBmt10", "diff_90_WBmt9_92_WBmt10", "pattern_90_WBmt9_92_WBmt10",    # T9→T10
+  "103_WBmt11", "diff_92_WBmt10_103_WBmt11", "pattern_92_WBmt10_103_WBmt11", # T10→T11
+  "105_WBmt12", "diff_103_WBmt11_105_WBmt12", "pattern_103_WBmt11_105_WBmt12", # T11→T12
+  "pattern_summary"                                                       # Final summarized pattern
+)
+
+# Reorder the cleaned dataset using only the columns present in both the manual list and actual data
+data_manual <- data_cleaned[, intersect(manual_col_order, names(data_cleaned)), drop = FALSE]
+
+# Replace any empty string values ("") with proper NA for consistency
+data_manual[data_manual == ""] <- NA
+```
+
+
+
+```{r Export Final Processed Data to Excel}
+
+# Write the manually ordered dataset (with diff and pattern columns) to an Excel file
+# - Uses the "openxlsx" package
+# - Saves the file to the defined path
+# - rowNames = FALSE ensures that row numbers are not written as a separate column
+write.xlsx(data_manual, "output/mean_diff.xlsx", rowNames = FALSE)
+
+# Print a message to the console to confirm that the file was saved successfully
+cat(" File with mean differences and patterns saved successfully.\n")
+
+```
+
+
+>>>>>>> fb0254f3d5c6721e966e7c02d1c642553523eed8

@@ -1,0 +1,13 @@
+name: meta_analysis_shiny
+title: meta_analysis_shiny
+username: prerana-chandratre
+account: prerana-chandratre
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 15481042
+bundleId: 10920703
+url: https://prerana-chandratre.shinyapps.io/meta_analysis_shiny/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: app_old_v2.R|old_app.R
