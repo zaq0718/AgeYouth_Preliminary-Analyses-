@@ -1,0 +1,332 @@
+---
+title: "Untitled"
+author: "Prerana"
+date: "2025-10-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+### ===============================================================
+### Age–Youth Meta-Analysis (simple CHE-style)
+### ===============================================================
+
+# --- Packages ---
+need <- c("readxl","dplyr","metafor","clubSandwich","forcats")
+to_install <- setdiff(need, rownames(installed.packages()))
+if (length(to_install)) install.packages(to_install, repos="https://cloud.r-project.org")
+invisible(lapply(need, library, character.only=TRUE))
+
+# --- Read file ---
+data <- readxl::read_xlsx("output/processed_data_aw.xlsx")
+
+# --- Basic preparation ---
+dat <- data %>%
+  rename(
+    StudyID   = `1_ID`,
+    SampleID  = `1.1_CaseID`,
+    ESID      = RowID,
+    n         = `10_Size`,
+    age       = `11_Mage`,
+    female    = `18_Female`,
+    construct = `Negative/Positive+LS`,
+    income    = income_level,
+    m_i       = WBmi,
+    sd_i      = WBsdi,
+    m_j       = WBmj,
+    sd_j      = WBsdj,
+    r_ij      = WBcorrij,
+    timelag   = timelagc
+  ) %>%
+  mutate(
+    n = as.numeric(n),
+    age = as.numeric(age),
+    female = ifelse(female > 1, female/100, female),
+    r_ij = as.numeric(r_ij),
+    timelag = as.numeric(timelag),
+    construct = as.factor(construct),
+    income = as.factor(income)
+  )
+
+# --- Compute effect sizes ---
+## A. Mean-level change (SMCR)
+es_ml <- escalc(
+  measure = "SMCR",
+  m1i = m_j, sd1i = sd_j,
+  m2i = m_i, sd2i = sd_i,
+  ni  = n, ri = r_ij,
+  data = dat
+) %>%
+  mutate(type = "mean_level")
+
+## B. Sequential correlations (Fisher z)
+es_sc <- escalc(
+  measure = "ZCOR",
+  ri = r_ij, ni = n,
+  data = dat
+) %>%
+  mutate(type = "seq_corr")
+
+# Combine both
+es <- bind_rows(es_ml, es_sc) %>%
+  mutate(
+    age_c = scale(age, center = TRUE, scale = FALSE) %>% as.numeric(),
+    age2 = age_c^2,
+    age3 = age_c^3
+  )
+
+# --- Helper function for CHE-style model ---
+fit_CHE <- function(df, rho = 0.6) {
+  V <- vcalc(
+    vi = df$vi,
+    cluster = df$StudyID,
+    subgroup = df$SampleID,
+    obs = df$ESID,
+    rho = rho,
+    data = df
+  )
+  model <- rma.mv(
+    yi = yi, V = V, data = df,
+    random = ~ 1 | StudyID/ESID,
+    method = "REML",
+    sparse = TRUE
+  )
+  list(model=model, V=V)
+}
+
+# --- Fit base models ---
+ml_data <- es %>% filter(type == "mean_level")
+sc_data <- es %>% filter(type == "seq_corr")
+
+m_ml <- fit_CHE(ml_data)
+m_sc <- fit_CHE(sc_data)
+
+cat("\n=== Base Model: Mean-level (SMCR) ===\n")
+print(summary(m_ml$model))
+print(coef_test(m_ml$model, vcov="CR2", cluster=ml_data$StudyID))
+
+cat("\n=== Base Model: Sequential (Fisher z) ===\n")
+print(summary(m_sc$model))
+print(coef_test(m_sc$model, vcov="CR2", cluster=sc_data$StudyID))
+
+# --- Moderator models ---
+fit_mod <- function(df, rho = 0.6) {
+  V <- vcalc(
+    vi = df$vi,
+    cluster = df$StudyID,
+    subgroup = df$SampleID,
+    obs = df$ESID,
+    rho = rho,
+    data = df
+  )
+  fm <- rma.mv(
+    yi ~ construct + age_c + age2 + age3 + female * income + timelag,
+    V = V, data = df,
+    random = ~ 1 | StudyID/ESID,
+    method = "REML",
+    sparse = TRUE
+  )
+  list(
+    model = fm,
+    robust = coef_test(fm, vcov="CR2", cluster=df$StudyID)
+  )
+}
+
+mod_ml <- fit_mod(ml_data)
+mod_sc <- fit_mod(sc_data)
+
+cat("\n=== Moderator Model: Mean-level ===\n")
+print(summary(mod_ml$model))
+print(mod_ml$robust)
+
+cat("\n=== Moderator Model: Sequential ===\n")
+print(summary(mod_sc$model))
+print(mod_sc$robust)
+
+
+
+```
+```{r}
+### ===============================================================
+### Age–Youth Meta-Analysis (CHE-style) with Safe Moderators
+### File: long_format_with_newcol.xlsx
+### ===============================================================
+
+
+# --- Effect sizes ---
+## A) Mean-level: SMCR
+es_ml <- escalc(
+  measure = "SMCR",
+  m1i = m_j, sd1i = sd_j,  # post
+  m2i = m_i, sd2i = sd_i,  # pre
+  ni  = n, ri = r_ij,
+  data = dat
+) %>%
+  mutate(type = "mean_level")
+
+## B) Sequential: Fisher z of r_ij
+es_sc <- escalc(
+  measure = "ZCOR",
+  ri = r_ij, ni = n,
+  data = dat
+) %>%
+  mutate(type = "seq_corr")
+
+# Combine and build age polynomials
+es <- bind_rows(es_ml, es_sc) %>%
+  mutate(
+    age_c = as.numeric(scale(age, center = TRUE, scale = FALSE)),
+    age2  = age_c^2,
+    age3  = age_c^3
+  )
+
+# Split
+ml_data <- es %>% filter(type == "mean_level")
+sc_data <- es %>% filter(type == "seq_corr")
+
+# Optional: set reference levels for interpretability
+ml_data <- ml_data %>%
+  mutate(
+    construct = fct_relevel(construct, "Positive"),
+    income    = fct_drop(income)
+  )
+sc_data <- sc_data %>%
+  mutate(
+    construct = fct_relevel(construct, "Positive"),
+    income    = fct_drop(income)
+  )
+
+# --- CHE base fit helper ---
+fit_CHE <- function(df, rho = 0.6) {
+  V <- vcalc(
+    vi = df$vi,
+    cluster = df$StudyID,
+    subgroup = df$SampleID,
+    obs = df$ESID,
+    rho = rho,
+    data = df
+  )
+  model <- rma.mv(
+    yi = yi, V = V, data = df,
+    random = ~ 1 | StudyID/ESID,
+    method = "REML",
+    sparse = TRUE
+  )
+  list(model = model, V = V)
+}
+
+# --- Base models (for reference) ---
+m_ml <- fit_CHE(ml_data)
+m_sc <- fit_CHE(sc_data)
+
+cat("\n=== Base CHE — Mean-level (SMCR) ===\n")
+print(summary(m_ml$model))
+print(coef_test(m_ml$model, vcov = "CR2", cluster = ml_data$StudyID))
+
+cat("\n=== Base CHE — Sequential (Fisher z) ===\n")
+print(summary(m_sc$model))
+print(coef_test(m_sc$model, vcov = "CR2", cluster = sc_data$StudyID))
+
+# --- Safe Wald helper (fixed) ---
+safe_Wald <- function(model, terms, cluster, label) {
+  bnames <- names(coef(model))
+  keep   <- intersect(terms, bnames)
+  if (length(keep) == 0) {
+    cat(sprintf("[SKIP] Wald test for %s: no matching coefficients in model.\n", label))
+    return(NA)
+  }
+  C_mat <- clubSandwich::constrain_zero(model, coefs = keep)
+  clubSandwich::Wald_test(model, constraints = C_mat, vcov = "CR2", cluster = cluster)
+}
+
+# --- Moderator fit helper (error-safe) ---
+fit_mod <- function(df, rho = 0.6) {
+  V <- metafor::vcalc(
+    vi = df$vi,
+    cluster = df$StudyID,
+    subgroup = df$SampleID,
+    obs = df$ESID,
+    rho = rho,
+    data = df
+  )
+
+  fm <- metafor::rma.mv(
+    yi ~ construct + age_c + age2 + age3 + female * income + timelag,
+    V = V, data = df,
+    random = ~ 1 | StudyID/ESID,
+    method = "REML",
+    sparse = TRUE
+  )
+
+  rb <- clubSandwich::coef_test(fm, vcov = "CR2", cluster = df$StudyID)
+  bnames <- names(coef(fm))
+
+  # define actual terms present
+  terms_construct <- grep("^construct", bnames, value = TRUE)
+  terms_age       <- intersect(c("age_c","age2","age3"), bnames)
+  terms_fi        <- grep("^female:income", bnames, value = TRUE)
+  terms_lag       <- intersect("timelag", bnames)
+
+  # safe Walds
+  wt_construct <- safe_Wald(fm, terms_construct, df$StudyID, "construct")
+  wt_age       <- safe_Wald(fm, terms_age,       df$StudyID, "age (linear+quadratic+cubic)")
+  wt_fi        <- safe_Wald(fm, terms_fi,        df$StudyID, "female × income")
+  wt_lag       <- safe_Wald(fm, terms_lag,       df$StudyID, "timelag")
+
+  list(model = fm, robust = rb,
+       wald = list(construct = wt_construct, age = wt_age,
+                   female_x_income = wt_fi, timelag = wt_lag))
+}
+
+  # Fit full moderator model
+  fm <- rma.mv(
+    yi ~ construct + age_c + age2 + age3 + female * income + timelag,
+    V = V, data = df,
+    random = ~ 1 | StudyID/ESID,
+    method = "REML",
+    sparse = TRUE
+  )
+
+  # Robust table
+  rb <- clubSandwich::coef_test(fm, vcov = "CR2", cluster = df$StudyID)
+
+  # Build term sets dynamically based on actual coefficient names
+  bnames <- names(coef(fm))
+
+  # 1) construct: all coefs starting with "construct" (excluding intercept)
+  terms_construct <- grep("^construct", bnames, value = TRUE)
+
+  # 2) age block: age_c, age2, age3 (whichever survived)
+  terms_age <- intersect(c("age_c","age2","age3"), bnames)
+
+  # 3) female × income interaction: coefs like "female:incomeX"
+  terms_fi <- grep("^female:income", bnames, value = TRUE)
+
+  # 4) timelag (single term if present)
+  terms_lag <- intersect("timelag", bnames)
+
+  
+
+# --- Fit moderators (drop-safe) ---
+mod_ml <- fit_mod(ml_data)
+mod_sc <- fit_mod(sc_data)
+
+cat("\n=== Moderators — Mean-level (SMCR) ===\n")
+print(summary(mod_ml$model))
+cat("\nCR2 robust table — Mean-level:\n")
+print(mod_ml$robust)
+cat("\nOmnibus Wald tests — Mean-level:\n")
+print(mod_ml$wald)
+
+cat("\n=== Moderators — Sequential (Fisher z) ===\n")
+print(summary(mod_sc$model))
+cat("\nCR2 robust table — Sequential:\n")
+print(mod_sc$robust)
+cat("\nOmnibus Wald tests — Sequential:\n")
+print(mod_sc$wald)
+
+```
+

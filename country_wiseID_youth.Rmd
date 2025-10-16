@@ -1,0 +1,155 @@
+---
+title: "country_wiseID"
+author: "Prerana"
+---
+
+```{r}
+# compute_countries_by_article_case.R
+library(readxl)
+library(dplyr)
+library(stringr)
+library(writexl)  # install.packages("writexl") if needed
+library(readr)
+```
+
+```{r}
+# --- input / output paths ---
+infile <- "output/processed_data_aw.xlsx"
+out_dir <- "output"
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+# --- read data ---
+df <- read_xlsx(infile, .name_repair = "unique")
+```
+
+```{r}
+# --- find likely column names for ArticleID, CaseID, Country ---
+col_article <- names(df)[which(str_detect(tolower(names(df)), "articleid|1_article|1article"))[1]]
+col_case    <- names(df)[which(str_detect(tolower(names(df)), "caseid|1.1_caseid|1_1_caseid"))[1]]
+col_country <- names(df)[which(str_detect(tolower(names(df)), "cnt|country|country_name|18_cnt"))[1]]
+
+# safety: if any not found try fallback exact names
+if (is.na(col_article) || length(col_article) == 0) {
+  if ("1_ID" %in% names(df)) col_article <- "1_ID"
+}
+if (is.na(col_case) || length(col_case) == 0) {
+  if ("1.1_CaseID" %in% names(df)) col_case <- "1.1_CaseID"
+}
+if (is.na(col_country) || length(col_country) == 0) {
+  if ("16_CNT" %in% names(df)) col_country <- "16_CNT"
+}
+
+# stop if we still couldn't detect a country column
+if (is.na(col_country) || length(col_country) == 0) {
+  stop("Could not detect a country column in the dataset. Check column names in processed_data_aw.xlsx")
+}
+
+# --- normalize/clean country values ---
+df <- df %>%
+  mutate(
+    country_raw = as.character(.data[[col_country]]),
+    country_clean = country_raw %>%
+      str_replace_all("\\s*;\\s*", "; ") %>%   # normalize separators
+      str_replace_all("\\bNA\\b|^NA$|NA4", "") %>% # remove NA tokens
+      str_trim() %>%
+      na_if("") %>%
+      # unify capitalization
+      str_to_title()
+  )
+
+# --- countries per article ---
+countries_per_article <- df %>%
+  filter(!is.na(country_clean)) %>%
+  group_by(article = .data[[col_article]]) %>%
+  summarise(
+    n_countries = n_distinct(country_clean),
+    countries = paste(sort(unique(country_clean)), collapse = "; "),
+    n_cases = n_distinct(.data[[col_case]]),   # optional: how many case-ids in article
+    .groups = "drop"
+  ) %>%
+  arrange(desc(n_countries), article)
+
+# --- countries per (article + case) ---
+countries_per_case <- df %>%
+  # keep only rows where case id exists
+  filter(!is.na(.data[[col_case]])) %>%
+  group_by(article = .data[[col_article]], case = .data[[col_case]]) %>%
+  summarise(
+    n_countries = n_distinct(country_clean[!is.na(country_clean)]),
+    countries = paste(sort(unique(country_clean[!is.na(country_clean)])), collapse = "; "),
+    n_rows = n(),   # how many rows correspond to this (article,case)
+    .groups = "drop"
+  ) %>%
+  arrange(article, case)
+```
+
+```{r}
+# --- save outputs ---
+write_csv(countries_per_article, file.path(out_dir, "countries_per_article.csv"))
+write_csv(countries_per_case,    file.path(out_dir, "countries_per_case.csv"))
+
+# also write both sheets into one Excel workbook
+write_xlsx(
+  list(
+    countries_per_article = countries_per_article,
+    countries_per_case = countries_per_case
+  ),
+  path = file.path(out_dir, "article_case_countries.xlsx")
+)
+```
+
+```{r}
+# Summary 
+
+# total counts
+n_articles <- nrow(countries_per_article)
+n_cases    <- if (exists("countries_per_case") && nrow(countries_per_case) > 0) nrow(countries_per_case) else 0
+
+# total distinct countries across all rows (robust to empty/NA)
+all_country_list <- unlist(
+  strsplit(
+    na.omit(countries_per_article$countries[countries_per_article$countries != ""]),
+    split = ";\\s*"
+  )
+)
+total_distinct_countries <- length(unique(trimws(all_country_list)))
+
+cat("=== Summary: countries per article / case ===\n")
+cat("Articles processed (rows in countries_per_article):", n_articles, "\n")
+cat("Cases processed (rows in countries_per_case):", n_cases, "\n")
+cat("Total distinct countries found across all articles:", total_distinct_countries, "\n\n")
+
+# distribution statistics for countries per article
+if (n_articles > 0) {
+  cat("Countries per article - summary:\n")
+  print(summary(countries_per_article$n_countries))
+  cat("\nNumber of articles with at least one country:", sum(countries_per_article$n_countries > 0), "\n\n")
+}
+
+# top 10 articles by number of countries
+if (n_articles > 0) {
+  cat("Top articles by distinct country count (top 10):\n")
+  top_articles <- countries_per_article %>%
+    arrange(desc(n_countries)) %>%
+    slice_head(n = 10) %>%
+    select(article, n_countries, countries)
+  print(top_articles)
+  cat("\n")
+}
+
+# distribution and top for cases (if available)
+if (n_cases > 0) {
+  cat("Countries per (article,case) - summary:\n")
+  print(summary(countries_per_case$n_countries))
+  cat("\nTop (article, case) rows by country count (top 10):\n")
+  top_cases <- countries_per_case %>%
+    arrange(desc(n_countries)) %>%
+    slice_head(n = 10) %>%
+    select(article, case, n_countries, countries)
+  print(top_cases)
+  cat("\n")
+}
+
+
+```
+

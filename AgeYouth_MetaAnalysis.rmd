@@ -1283,8 +1283,6 @@ upper_bound <- (0.558+ 1.96 *0.035) # upper_bound
 ```
 
 
-
-
 ```{r Effect Size Analyses}
 
 #For Positive affects
@@ -1293,22 +1291,30 @@ print(res, digits=3)
 
 sum(dat.positive.corr$X10_Size)
 
+```
+
+```{r Fischer for  Positive affects}
 fisherz2r(0.621) #fischer Z
 fisherz2r(0.5994) #lower bound
 fisherz2r(0.6425) #upper bound
+```
 
+```{r}
 
 # For Negative affects
 res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative)
 print(res, digits=3)
 
 sum(dat.negative.corr$`10_Size`)
+```
 
+
+```{r Fischer for  Negative affects}
 fisherz2r(0.558)
 fisherz2r(0.4894)
 fisherz2r(0.6266)
-
 ```
+
 
 ```{r Age Effects}
 # for Positive

@@ -24,31 +24,22 @@ theme_update(              # Updates global ggplot2 theme settings
 
 ```{r Data read}
 # Step 1: Read Excel file with original column names
-data_youth_qc <- read_xlsx("data/ageYouth_qualitycode_.xlsx", skip = 1)
+data_youth_qc <- read_xlsx("data/ageYouth_qualitycode.xlsx", skip = 1)
 head(data_youth_qc)
 
 ```
 
+
 ```{r data cleaning}
 
-
-# Clean the data
 dat_clean <- data_youth_qc %>%
-  # Drop unwanted columns
-  select(-`5_Reviewer`, -`4_Agre`) %>%
-  # Recode all non-ID/Title columns
-  mutate(across(
-    -c(`0_IDF`, `1_ID`, `2_Author`, `3_Year`, `4_Title`, `Rep_Rep`),
-    ~ case_when(
-      . %in% c("yes", "Yes") ~ 0,
-      . %in% c("no", "No") ~ 1,
-      . %in% c("9999", "unable to determine") ~ NA_real_,
-      TRUE ~ NA_real_
-    )
+  select(-c(`5_Reviewer`, `4_Agre`)) %>%
+  mutate(`15_Sam` = case_when(
+    `15_Sam` %in% c(1, "1") ~ "Random Probability sample",
+    `15_Sam` %in% c(0, "0") ~ "not random probability Sample",
+    `15_Sam` %in% c("9999", "unable to determine") ~ NA_character_,
+    TRUE ~ as.character(`15_Sam`)   # keep original value otherwise
   ))
-
-# Inspect result
-head(dat_clean)
 
 ```
 
