@@ -40,7 +40,7 @@
 ### **5. Shiny Application**
 - Folder: `meta_analysis_shiny/`  
   - Contains all **old and new Shiny app versions**, supporting processed files, and final cleaned outputs for interactive visualization of meta-analysis results.
-
+  - Link: https://prerana-chandratre.shinyapps.io/meta_analysis_shiny/
 ---
 
 ## ⚙️ How to Use
