@@ -181,6 +181,8 @@ data_aw <- data_aw %>%
 summary(data_aw$`WBtitj`)
 
 ```
+
+
 ```{r Relaability Data cleaning and adding avg column}
 
 # Clean column: 33_Relt1
@@ -390,6 +392,8 @@ summary(dat.positive2)
 ```{r checking number of values in each timelag}
 table(data_aw$WBtitj)
 ```
+
+
 ```{r splitting timelag into small and big}
 # Create subset where timelag is 6 months or less
 data_aw_timelag_short <- subset(data_aw, WBtitj <= 0.5)
@@ -402,6 +406,8 @@ cat("Count of cases with timelag ≤ 6 months:", nrow(data_aw_timelag_short), "\
 cat("Count of cases with timelag > 6 months:", nrow(data_aw_timelag_long), "\n")
 
 ```
+
+
 ```{r Checking Ethnecity in the data}
 table(data_aw$`17_Eth`)
 ```
@@ -798,6 +804,7 @@ boxplot(es_d ~ region, data = dat.positive,
         cex.axis = 0.8)
 
 ```
+
 
 ```{r Multivariate Moderator Models for Mean-Level Change}
 # Positive effect size model

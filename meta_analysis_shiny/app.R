@@ -359,111 +359,80 @@ server <- function(input, output, session) {
     keep <- intersect(names(dat_qc), all_cols)
     datatable(dat_qc[keep], options = list(pageLength = 10, scrollX = TRUE))
   })
+ 
+  
+   
+  
   
   
   output$qc_discrete_summary <- renderDT({
-    id_cols <- c("0_IDF","1_ID","2_Author","3_Year","4_Title")
-    qc_cols <- setdiff(names(dat_qc), id_cols)
-    if (length(qc_cols) == 0) {
-      return(datatable(data.frame(Note = "No QC columns available.")))
+
+  id_cols <- c("0_IDF","1_ID","2_Author","3_Year","4_Title")
+  qc_cols <- setdiff(names(dat_qc), id_cols)
+
+  if (length(qc_cols) == 0) {
+    return(datatable(data.frame(Note = "No QC columns available.")))
+  }
+
+  # Flatten and recode
+  long <- dat_qc %>%
+    select(all_of(qc_cols)) %>%
+    pivot_longer(everything(), names_to = "variable", values_to = "value") %>%
+    mutate(
+      value = tolower(trimws(as.character(value))),
+      value = case_when(
+        value %in% c("yes", "y", "true",
+                     "sample recruitment", "random probability sample") ~ "Yes",
+        value %in% c("no", "n", "false",
+                     "not random probability sample") ~ "No",
+        value %in% c("partly", "partial", "part") ~ "Partly",
+        is.na(value) | value %in% c("", "na", "n/a", "not provided",
+                                    "missing", "none", "nil",
+                                    "unable to determine", "unable",
+                                    "unknown") ~ "Unable to determine",
+        TRUE ~ "Unable to determine"
+      )
+    )
+
+  # Summarize
+  summary_tbl <- long %>%
+    group_by(variable, value) %>%
+    summarise(n = n(), .groups = "drop") %>%
+    pivot_wider(
+      names_from = value,
+      values_from = n,
+      values_fill = list(n = 0)
+    )
+
+  # Ensure all expected columns exist and are numeric
+  for (col in c("Yes", "No", "Partly", "Unable to determine")) {
+    if (!col %in% names(summary_tbl)) {
+      summary_tbl[[col]] <- 0
     }
-    tmp <- dat_qc %>% mutate(across(all_of(qc_cols), ~ as.character(.)))
-    long <- tmp %>%
-      select(all_of(qc_cols)) %>%
-      pivot_longer(everything(), names_to = "variable", values_to = "value") %>%
-      mutate(value = replace_na(value, "NA"))
-    summary_tbl <- long %>%
-      group_by(variable, value) %>%
-      summarise(n = n(), .groups = "drop") %>%
-      pivot_wider(names_from = value, values_from = n, values_fill = 0) %>%
-      arrange(variable)
-    
-    # ---- canonicalize/collapse value columns (case-insensitive) ----
-    # Keep 'variable' column untouched and collapse the other columns which are value labels
-    orig_names <- colnames(summary_tbl)
-    if ("variable" %in% orig_names) {
-      var_idx <- which(orig_names == "variable")
-      value_idx <- setdiff(seq_along(orig_names), var_idx)
-      value_names <- orig_names[value_idx]
-      
-      canonicalize_name <- function(n) {
-        n2 <- str_trim(tolower(as.character(n)))
-        if (n2 %in% c("0", "yes", "y", "true")) return("Yes")
-        if (n2 %in% c("1", "no", "n", "false")) return("No")
-        if (n2 %in% c("9999", "unable to determine", "unable to determine")) return("Unable to determine")
-        if (n2 %in% c("na", "not provided", "n/a", "", "missing")) return("Not Provided")
-        # fallback: Title Case of the cleaned name
-        return(str_to_title(n2))
-      }
-      
-      canon_names <- vapply(value_names, canonicalize_name, character(1))
-      unique_names <- unique(canon_names)
-      
-      collapsed_values <- lapply(unique_names, function(cn) {
-        idx_local <- which(canon_names == cn)
-        if (length(idx_local) == 1) {
-          # return the original numeric column (ensure numeric)
-          col <- summary_tbl[[ value_idx[idx_local] ]]
-          if (is_numeric_like_basic(col)) return(as.numeric(col))
-          return(as.character(col))
-        } else {
-          cols <- summary_tbl[ , value_idx[idx_local], drop = FALSE]
-          # if all numeric-like -> sum them
-          if (all(sapply(cols, is_numeric_like_basic))) {
-            mat <- sapply(cols, function(x) as.numeric(as.character(x)))
-            return(rowSums(mat, na.rm = TRUE))
-          } else {
-            # otherwise coalesce to first non-NA / non-empty per row (as character)
-            cols_char <- lapply(cols, function(x) {
-              x_char <- as.character(x)
-              x_char[x_char == ""] <- NA_character_
-              x_char
-            })
-            return(Reduce(function(a, b) dplyr::coalesce(a, b), cols_char))
-          }
-        }
-      })
-      
-      # assemble final cleaned table: variable + collapsed columns
-      clean_tbl <- data.frame(variable = summary_tbl$variable, stringsAsFactors = FALSE)
-      for (i in seq_along(unique_names)) {
-        clean_tbl[[ unique_names[i] ]] <- collapsed_values[[i]]
-      }
-      
-    } else {
-      # no 'variable' column (unlikely) - just process all columns
-      # fallback: apply simpler canonicalization to colnames then collapse
-      orig_names2 <- colnames(summary_tbl)
-      canon_names2 <- vapply(orig_names2, function(n) {
-        n2 <- str_trim(tolower(as.character(n)))
-        if (n2 %in% c("0", "yes", "y", "true")) return("Yes")
-        if (n2 %in% c("1", "no", "n", "false")) return("No")
-        if (n2 %in% c("9999", "unable to determine", "unable to determine")) return("Unable to determine")
-        if (n2 %in% c("na", "not provided", "n/a", "", "missing")) return("Not Provided")
-        str_to_title(n2)
-      }, character(1))
-      unique_names2 <- unique(canon_names2)
-      collapsed_values2 <- lapply(unique_names2, function(cn) {
-        idx_local <- which(canon_names2 == cn)
-        cols <- summary_tbl[ , idx_local, drop = FALSE]
-        if (all(sapply(cols, is_numeric_like_basic))) {
-          mat <- sapply(cols, function(x) as.numeric(as.character(x)))
-          return(rowSums(mat, na.rm = TRUE))
-        } else {
-          cols_char <- lapply(cols, function(x) {
-            x_char <- as.character(x)
-            x_char[x_char == ""] <- NA_character_
-            x_char
-          })
-          return(Reduce(function(a, b) dplyr::coalesce(a, b), cols_char))
-        }
-      })
-      clean_tbl <- as.data.frame(collapsed_values2, stringsAsFactors = FALSE)
-      colnames(clean_tbl) <- unique_names2
-    }
-    
-    datatable(clean_tbl, options = list(pageLength = 20, scrollX = TRUE))
-  })
+  }
+
+  summary_tbl <- summary_tbl %>%
+    select(variable, Yes, No, Partly, `Unable to determine`) %>%
+    arrange(variable)
+
+  # Convert all columns to atomic numeric or character (avoid DT list columns)
+  summary_tbl <- as.data.frame(summary_tbl)
+  summary_tbl$variable <- as.character(summary_tbl$variable)
+  summary_tbl$Yes <- as.numeric(summary_tbl$Yes)
+  summary_tbl$No <- as.numeric(summary_tbl$No)
+  summary_tbl$Partly <- as.numeric(summary_tbl$Partly)
+  summary_tbl$`Unable to determine` <- as.numeric(summary_tbl$`Unable to determine`)
+
+  datatable(
+    summary_tbl,
+    rownames = FALSE,
+    options = list(pageLength = 20, scrollX = TRUE)
+  )
+})
+
+  
+  
+
   
   ####################
   output$qc_basic_info <- renderTable({

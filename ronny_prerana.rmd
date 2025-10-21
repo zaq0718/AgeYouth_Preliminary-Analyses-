@@ -1,0 +1,397 @@
+---
+title: "Study_try"
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message=FALSE, warning=FALSE)
+```
+
+# Meta-Analytic Data {.tabset}
+
+## Install and load relevant `R` packages
+
+```{r Packages, include = TRUE, results = 'hide', message=FALSE}
+# Install R packages (if needed)
+# install.packages("pacman")
+library(pacman)
+pacman::p_load(psych,
+               metaSEM,
+               metafor,
+               robumeta,
+               clubSandwich,
+               ggplot2,
+               POMADE,
+               dplyr)
+
+## Number of available cores
+ncores <- parallel::detectCores() - 1
+
+## Increase the output length for display
+options(max.print = 10000)
+
+```
+
+## Data Input and Preparation
+```{r Data input, include = TRUE, cache = TRUE}
+## Data set in wide format
+ageyouth <- read_xlsx("output/processed_data_aw.xlsx")
+## Check the data
+head(ageyouth, 10)
+
+# --- Basic preparation ---
+ageyouth <- ageyouth %>%
+  rename(
+    StudyID   = `1_ID`,
+    SampleID  = `1.1_CaseID`,
+    ESID      = RowID,
+    n         = `10_Size`,
+    age       = `11_Mage`,
+    female    = `18_Female`,
+    construct = `Negative/Positive+LS`,
+    income    = income_level,
+    m_i       = WBmi,
+    sd_i      = WBsdi,
+    m_j       = WBmj,
+    sd_j      = WBsdj,
+    r_ij      = WBcorrij,
+    timelag   = timelagc
+  ) %>%
+  mutate(
+    n = as.numeric(n),
+    age = as.numeric(age),
+    female = ifelse(female > 1, female/100, female),
+    r_ij = as.numeric(r_ij),
+    timelag = as.numeric(timelag),
+    construct = as.factor(construct),
+    income = as.factor(income)
+  )
+```
+## Description of the Meta-Analytic Dataset
+
+```{r data description, include = TRUE, message=FALSE, cache = TRUE}
+## Number of effect sizes
+nrow(ageyouth)
+
+## Number of articles
+length(table(ageyouth$StudyID))
+table(ageyouth$StudyID)
+
+## Average number of effect sizes per study
+mean(table(ageyouth$StudyID)/10)
+sd(table(ageyouth$StudyID)/10)
+median(table(ageyouth$StudyID)/10)
+min(table(ageyouth$StudyID)/10)
+max(table(ageyouth$StudyID)/10)
+
+## Number of samples
+length(table(ageyouth$SampleID))
+table(ageyouth$SampleID)
+
+## Overall sample size
+OverallN <- round(round(sum(aggregate(ageyouth$n, 
+                                      by = list(ageyouth$SampleID),
+                                      FUN = mean)$x, 
+                            na.rm = TRUE), 
+                        0))
+OverallN
+
+## Distribution of sample sizes
+psych::describe(ageyouth$n)
+hist(ageyouth$n,
+     xlab = "Sample size",
+     main = "Distribution of the study sample sizes")
+
+## Effect sizes
+psych::describe(ageyouth$es_dyear)
+hist(ageyouth$es_dyear,
+     xlab = "Standardized mean difference (corrected by year)",
+     main = "Distribution of the effect sizes")
+
+```
+
+# Compute effect sizes
+
+```{r A. Mean-level change (SMCR)}
+
+es_ml <- escalc(
+  measure = "SMCR",
+  m1i = m_j, sd1i = sd_j,
+  m2i = m_i, sd2i = sd_i,
+  ni  = n, ri = r_ij,
+  data = dat
+) %>%
+  mutate(type = "mean_level")
+
+## B. Sequential correlations (Fisher z)
+es_sc <- escalc(
+  measure = "ZCOR",
+  ri = r_ij, ni = n,
+  data = dat
+) %>%
+  mutate(type = "seq_corr")
+
+# Combine both
+es <- bind_rows(es_ml, es_sc) %>%
+  mutate(
+    age_c = scale(age, center = TRUE, scale = FALSE) %>% as.numeric(),
+    age2 = age_c^2,
+    age3 = age_c^3
+  )
+```
+
+## Helper function for CHE-style model (From Ronny's Code)
+
+```{r}
+
+fit_CHE <- function(df, rho = 0.6) {
+  V <- vcalc(
+    vi = df$vi,
+    cluster = df$StudyID,
+    subgroup = df$SampleID,
+    obs = df$ESID,
+    rho = rho,
+    data = df
+  )
+  model <- rma.mv(
+    yi = yi, V = V, data = df,
+    random = ~ 1 | StudyID/ESID,
+    method = "REML",
+    sparse = TRUE
+  )
+  list(model=model, V=V)
+}
+
+
+### Same ID from Ronny's code
+
+# Fit base models 
+ml_data <- es %>% filter(type == "mean_level")
+sc_data <- es %>% filter(type == "seq_corr")
+
+m_ml <- fit_CHE(ml_data)
+m_sc <- fit_CHE(sc_data)
+
+cat("\n Base Model: Mean-level (SMCR) \n")
+print(summary(m_ml$model))
+print(coef_test(m_ml$model, vcov="CR2", cluster=ml_data$StudyID))
+
+cat("\n Base Model: Sequential (Fisher z) \n")
+print(summary(m_sc$model))
+print(coef_test(m_sc$model, vcov="CR2", cluster=sc_data$StudyID))
+```
+# Sample Study with Moderator Age, Female, Income, Timelag
+
+```{r}
+#  Moderator models 
+fit_mod <- function(df, rho = 0.6) {
+  V <- vcalc(
+    vi = df$vi,
+    cluster = df$StudyID,
+    subgroup = df$SampleID,
+    obs = df$ESID,
+    rho = rho,
+    data = df
+  )
+  fm <- rma.mv(
+    yi ~ construct + age_c + age2 + age3 + female * income + timelag,
+    V = V, data = df,
+    random = ~ 1 | StudyID/ESID,
+    method = "REML",
+    sparse = TRUE
+  )
+  list(
+    model = fm,
+    robust = coef_test(fm, vcov="CR2", cluster=df$StudyID)
+  )
+}
+
+mod_ml <- fit_mod(ml_data)
+mod_sc <- fit_mod(sc_data)
+
+cat("\n=== Moderator Model: Mean-level ===\n")
+print(summary(mod_ml$model))
+print(mod_ml$robust)
+
+cat("\n=== Moderator Model: Sequential ===\n")
+print(summary(mod_sc$model))
+print(mod_sc$robust)
+```
+## 1. Moderator analyses For Construct (Positive/Negative Affect)
+
+```{r}
+U <- metafor::vcalc(vi = v_dyear,            # Sampling variances
+                    cluster = StudyID,       # Hierarchical level: Studies
+                    subgroup = SampleID,     # Correlational level: Samples
+                    obs = ESID,              # Level of effect sizes
+                    type = factor(Negative.Positive.LS+1),  # Different constructs
+                    data = agewell,          # Data set
+                    rho = list(rho, rho),      # Within-sample correlations of effects per construct
+                    checkpd = TRUE, 
+                    nearpd = FALSE)  
+```
+
+
+```{r che model study moderator, include = TRUE, cache = TRUE}
+
+## Positive vs. negative LS
+table(ageyouth$Negative.Positive.LS)
+
+## Model specification
+## Direct moderator effects
+CHE.model.mod <- rma.mv(yi = es_dyear,
+                    V = v_d,
+                    data = ageyouth,
+                    random = list(~ 1 | StudyID/ESID),
+                    method = "REML",
+                    time = TRUE,
+                    sparse = TRUE,
+                    mods =~ construct)
+
+## Model summary
+summary(CHE.model.mod)
+
+## Cluster-robust standard errors and p-values
+## with small-sample adjustment
+conf_int(CHE.model.mod, vcov = "CR2")
+coef_test(CHE.model.mod, vcov = "CR2")
+
+## Variance explanation (R-squared)
+## Note: This is the proportional reduction of variances.
+## Study level
+max(0, 1- CHE.model.mod$sigma2[1]/CHE.model$sigma2[1])
+## Effect size level (within studies)
+max(0, 1- CHE.model.mod$sigma2[2]/CHE.model$sigma2[2])
+
+
+
+
+## Model specification
+## Effects per moderator category
+## See also: https://bookdown.org/MathiasHarrer/Doing_Meta_Analysis_in_R/multilevel-ma.html#three-level-subgroup
+CHE.model.mod2 <- rma.mv(yi = es_dyear,
+                    V = v_d,
+                    data = ageyouth,
+                    random = list(~ 1 | StudyID/ESID),
+                    method = "REML",
+                    time = TRUE,
+                    sparse = TRUE,
+                    mods =~ factor(construct) - 1) # turn off the intercept
+
+## Model summary
+summary(CHE.model.mod2)
+
+```
+# above all everyhing should be similar
+
+# 2. Moderator Analysis: Age: linear, quadratic, cubic 
+
+```{r}
+## AGE (linear, quadratic, cubic)
+## Center age before adding powers
+ageyouth$agem1ic1 <- scale(ageyouth$age, center = TRUE, scale = FALSE)
+ageyouth$agem1ic2  <- ageyouth$agem1ic1^2
+ageyouth$agem1ic3  <- ageyouth$agem1ic1^3
+
+## Model specification
+CHE.model.age <- rma.mv(yi = es_dyear,
+                        V = v_d,
+                        data = ageyouth,
+                        random = list(~ 1 | StudyID/ESID),
+                        method = "REML",
+                        time = TRUE,
+                        sparse = TRUE,
+                        mods = ~ agem1ic1 + agem1ic2 + agem1ic3)
+
+## Model summary
+summary(CHE.model.age)
+
+## Cluster-robust SEs and p-values
+conf_int(CHE.model.age, vcov = "CR2")
+coef_test(CHE.model.age, vcov = "CR2")
+
+## Variance explanation (R?)
+max(0, 1 - CHE.model.age$sigma2[1]/CHE.model$sigma2[1])   # study level
+max(0, 1 - CHE.model.age$sigma2[2]/CHE.model$sigma2[2])   # effect-size level
+
+```
+
+# 3. Moderator Analysis: Female + Country Income
+
+```{r}
+## FEMALE + COUNTRY INCOME
+## (Main effects + their interaction if desired)
+
+CHE.model.sex.inc <- rma.mv(yi = es_dyear,
+                            V = v_d,
+                            data = ageyouth,
+                            random = list(~ 1 | StudyID/ESID),
+                            method = "REML",
+                            time = TRUE,
+                            sparse = TRUE,
+                            mods = ~ female + factor(income))
+
+## Model summary
+summary(CHE.model.sex.inc)
+
+## Cluster-robust SEs and p-values
+conf_int(CHE.model.sex.inc, vcov = "CR2")
+coef_test(CHE.model.sex.inc, vcov = "CR2")
+
+## Variance explanation (R?)
+max(0, 1 - CHE.model.sex.inc$sigma2[1]/CHE.model$sigma2[1])
+max(0, 1 - CHE.model.sex.inc$sigma2[2]/CHE.model$sigma2[2])
+
+## --- Optional: add interaction term ---
+CHE.model.sex.inc.int <- rma.mv(yi = es_dyear,
+                                V = v_d,
+                                data = ageyouth,
+                                random = list(~ 1 | StudyID/ESID),
+                                method = "REML",
+                                time = TRUE,
+                                sparse = TRUE,
+                                mods = ~ female * factor(income))
+
+summary(CHE.model.sex.inc.int)
+conf_int(CHE.model.sex.inc.int, vcov = "CR2")
+coef_test(CHE.model.sex.inc.int, vcov = "CR2")
+
+```
+
+# 4. Moderator Analysis: Time Lag
+
+```{r}
+## TIME LAG
+## (assumes column timelagc already centered or numeric)
+
+CHE.model.lag <- rma.mv(yi = es_dyear,
+                        V = v_d,
+                        data = ageyouth,
+                        random = list(~ 1 | StudyID/ESID),
+                        method = "REML",
+                        time = TRUE,
+                        sparse = TRUE,
+                        mods = ~ timelag)
+
+## Model summary
+summary(CHE.model.lag)
+
+## Cluster-robust SEs and p-values
+conf_int(CHE.model.lag, vcov = "CR2")
+coef_test(CHE.model.lag, vcov = "CR2")
+
+## Variance explanation (R?)
+max(0, 1 - CHE.model.lag$sigma2[1]/CHE.model$sigma2[1])
+max(0, 1 - CHE.model.lag$sigma2[2]/CHE.model$sigma2[2])
+
+```
+
+```{r session}
+sessionInfo()
+```
+
+
+
+
+
+
