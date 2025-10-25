@@ -1,5 +1,5 @@
 ---
-title: "age_well_meta_analysis"
+title: "age_youth_Meta analysis: mean level change and rank order Stability for sequential"
 author: "Prerana Chandratre"
 date: "13/07/2025"
 output: html_document
@@ -725,18 +725,18 @@ dat.positive_white$WBmj <- as.numeric(as.character(dat.positive_white$WBmj))
 dat.positive_other$WBmi <- as.numeric(as.character(dat.positive_other$WBmi))
 dat.positive_other$WBmj <- as.numeric(as.character(dat.positive_other$WBmj))
 
-# Run correlation tests – White/European group
-cat("White group – Correlation: % Female vs WBmi\n")
+# Run correlation tests  White/European group
+cat("White group  Correlation: % Female vs WBmi\n")
 print(cor.test(dat.positive_white$`18_Female`, dat.positive_white$WBmi))   # Correlation between %Female and WBmi
 
-cat("\n White group – Correlation: % Female vs WBmj\n")
+cat("\n White group Correlation: % Female vs WBmj\n")
 print(cor.test(dat.positive_white$`18_Female`, dat.positive_white$WBmj))   # Correlation between %Female and WBmj
 
-# Run correlation tests – Other ethnicities group
-cat("\n Other ethnicities – Correlation: % Female vs WBmi\n")
+# Run correlation tests Other ethnicities group
+cat("\n Other ethnicities Correlation: % Female vs WBmi\n")
 print(cor.test(dat.positive_other$`18_Female`, dat.positive_other$WBmi))   # Correlation between %Female and WBmi
 
-cat("\n Other ethnicities – Correlation: % Female vs WBmj\n")
+cat("\n Other ethnicities Correlation: % Female vs WBmj\n")
 print(cor.test(dat.positive_other$`18_Female`, dat.positive_other$WBmj))   # Correlation between %Female and WBmj
 
 ```
@@ -760,18 +760,18 @@ dat.positive_other$WBmi <- as.numeric(as.character(dat.positive_other$WBmi))
 dat.positive_other$WBmj <- as.numeric(as.character(dat.positive_other$WBmj))
 dat.positive_other$`10_Size`  <- as.numeric(as.character(dat.positive_other$`10_Size` ))
 
-# Run correlations – White group
-#cat(" White group – Correlation: Sample Size vs WBmi\n")
+# Run correlations White group
+#cat(" White group Correlation: Sample Size vs WBmi\n")
 #print(cor.test(dat.positive_white$X10_Size, dat.positive_white$WBmi))
 
-#cat("\n White group – Correlation: Sample Size vs WBmj\n")
+#cat("\n White group Correlation: Sample Size vs WBmj\n")
 print(cor.test(dat.positive_white$`10_Size` , dat.positive_white$WBmj))
 
-# Run correlations – Other group
-#cat("\n Other ethnicities – Correlation: Sample Size vs WBmi\n")
+# Run correlations Other group
+#cat("\n Other ethnicities Correlation: Sample Size vs WBmi\n")
 print(cor.test(dat.positive_other$`10_Size` , dat.positive_other$WBmi))
 
-#cat("\n Other ethnicities – Correlation: Sample Size vs WBmj\n")
+#cat("\n Other ethnicities Correlation: Sample Size vs WBmj\n")
 print(cor.test(dat.positive_other$`10_Size` , dat.positive_other$WBmj))
 
 
@@ -904,7 +904,7 @@ res_pos <- rma.mv(yi = es_dyear, V = v_dyear,
                   data = dat.positive,
                   mods = ~  WBtitj)
 
-cat("\n Multilevel model – Positive Affect:\n")
+cat("\n Multilevel model Positive Affect:\n")
 print(res_pos, digits = 4)
 
 
@@ -914,7 +914,7 @@ res_pos <- rma.mv(yi = es_dyear, V = v_dyear,
                   data = dat.negative,
                   mods = ~  WBtitj)
 
-cat("\n Multilevel model – Positive Affect:\n")
+cat("\n Multilevel model Positive Affect:\n")
 print(res_pos, digits = 4)
 ```
 
@@ -930,7 +930,7 @@ res_pos <- rma.mv(yi = es_dyear, V = v_dyear,
                   data = dat.positive,
                   mods = ~ `18_Female` + factor(region) + factor(income_level) + WBtitj)
 
-cat("\n Multilevel model – Positive Affect:\n")
+cat("\n Multilevel model Positive Affect:\n")
 print(res_pos, digits = 4)
 
 
@@ -941,7 +941,7 @@ res_neg <- rma.mv(yi = es_dyear, V = v_dyear,
                   data = dat.negative,
                   mods = ~ `18_Female` + factor(region) + factor(income_level) + WBtitj)
 
-cat("\n Multilevel model – Negative Affect:\n")
+cat("\n Multilevel model Negative Affect:\n")
 print(res_neg, digits = 4)
 
 ```
@@ -990,8 +990,8 @@ regtest(res)
 ```
 
 
-```{r Positive – Publication Bias}
-# Positive – Publication Bias
+```{r Positive Publication Bias}
+# Positive Publication Bias
 
 # Step 1: Standard random-effects meta-analysis
 res <- rma(yi = es_dyear, vi = v_dyear, data = dat.positive)
@@ -1031,7 +1031,7 @@ print(res, digits = 3)   # Print results rounded to 3 decimals
 
 
 # Test for funnel plot asymmetry (small-study effects / publication bias)
-regtest(res)   # Egger’s regression test
+regtest(res)   # Eggers regression test
 
 
 # Plot funnel plot for Positive Affect group
@@ -1042,7 +1042,7 @@ funnel(res,
 
 # Add custom text annotation on the plot (e.g., "P" for Positive)
 mtext("P", side = 3, line = 2.4, adj = -0.16, cex = 1.0)  
-# You can also add values like p-value or Egger’s test result here, e.g.:
+# You can also add values like p-value or Eggers test result here, e.g.:
 # mtext(paste0("Egger p = ", round(regtest(res)$pval, 3)), side = 3, line = 2.4, adj = 0, cex = 0.8)
 
 
@@ -1073,7 +1073,7 @@ print(res, digits = 3)   # Print results rounded to 3 decimals
 
 
 # Test for funnel plot asymmetry (publication bias / small-study effects)
-regtest(res)   # Egger’s regression test
+regtest(res)   # Eggers regression test
 
 
 # Plot funnel plot for Negative Affect group
@@ -1084,7 +1084,7 @@ funnel(res,
 
 # Add custom text annotation "N" (for Negative) above the plot
 mtext("N", side = 3, line = 2.4, adj = -0.16, cex = 1.0)  
-# You can also add values like Egger’s test p-value here, for example:
+# You can also add values like Eggers test p-value here, for example:
 # mtext(paste0("Egger's p = ", round(regtest(res)$pval, 3)), side = 3, line = 1.5, adj = 0, cex = 0.8)
 
 
@@ -1268,15 +1268,30 @@ dat.positive <- subset(data_aw, subset = data_aw$`Negative/Positive+LS` == 0)
 res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive)
 print(res, digits=3)
 
-fisherz2r(0.621)
-lower_bound <- (0.621-1.96 *0.011)
-upper_bound <- (0.621+1.96 *0.011)
+fisherz2r(0.619  )
+lower_bound <- (0.619  -1.96 *0.011)
+upper_bound <- (0.619  +1.96 *0.011)
 
 cat("Confidence interval: lower =", lower_bound, "\n")
 cat("Confidence interval: upper =", upper_bound, "\n")
 
 ```
 
+```{r for fisherz2r}
+library(psych)  # for fisherz2r
+
+# Values
+val1   <- fisherz2r(0.5504314)
+val_lo <- fisherz2r(0.59744   )  # lower
+val_hi <- fisherz2r(0.64056   )  # upper
+
+# Print them nicely
+cat("Main value :", val1, "\n")
+cat("Lower bound:", val_lo, "\n")
+cat("Upper bound:", val_hi, "\n")
+
+
+```
 
 ```{r Rank Order Stability: model for Negative affect}
 #For negative affects
@@ -1287,8 +1302,26 @@ print(res, digits=3)
 fisherz2r(0.558)
 lower_bound <- (0.558- 1.96 *0.035) #lower bound
 upper_bound <- (0.558+ 1.96 *0.035) # upper_bound
+
+cat("Confidence interval: lower =", lower_bound, "\n")
+cat("Confidence interval: upper =", upper_bound, "\n")
 ```
 
+```{r for fisherz2r}
+library(psych)  # for fisherz2r
+
+# Values
+val1   <- fisherz2r(0.506492)
+val_lo <- fisherz2r(0.4894   )  # lower
+val_hi <- fisherz2r(0.6266   )  # upper
+
+# Print them nicely
+cat("Main value :", val1, "\n")
+cat("Lower bound:", val_lo, "\n")
+cat("Upper bound:", val_hi, "\n")
+
+
+```
 
 ```{r Effect Size Analyses}
 
@@ -1299,12 +1332,7 @@ print(res, digits=3)
 sum(dat.positive.corr$X10_Size)
 
 ```
-
-```{r Fischer for  Positive affects}
-fisherz2r(0.621) #fischer Z
-fisherz2r(0.5994) #lower bound
-fisherz2r(0.6425) #upper bound
-```
+`
 
 ```{r}
 
@@ -1315,12 +1343,6 @@ print(res, digits=3)
 sum(dat.negative.corr$`10_Size`)
 ```
 
-
-```{r Fischer for  Negative affects}
-fisherz2r(0.558)
-fisherz2r(0.4894)
-fisherz2r(0.6266)
-```
 
 
 ```{r Age Effects}

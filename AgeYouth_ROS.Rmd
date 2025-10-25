@@ -1,5 +1,5 @@
 ---
-title: "AgeYouth_ROS"
+title: "AgeYouth_Rank order Stability including Sequential and Non-Sequential"
 author: "Prerana"
 date: "2025-10-21"
 output: html_document
@@ -199,7 +199,7 @@ head(data_youth)
 
 ```
 
-
+# Rank order Stability for Seq and non-Seq
 ```{r Computation of Effect Sizes of Rank-Order Stability}
 
 # Adjust correlations for reliability (disattenuated correlation) # we decided to skip rank order stability for now
@@ -239,15 +239,28 @@ dat.positive <- subset(data_youth, subset = data_youth$`Negative/Positive+LS` ==
 res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive)
 print(res, digits=3)
 
-fisherz2r(0.621)
-lower_bound <- (0.621-1.96 *0.011)
-upper_bound <- (0.621+1.96 *0.011)
+fisherz2r(0.789)
+lower_bound <- fisherz2r(0.789-1.96 *0.015)
+upper_bound <- fisherz2r(0.789+1.96 *0.015)
 
 cat("Confidence interval: lower =", lower_bound, "\n")
 cat("Confidence interval: upper =", upper_bound, "\n")
 
 ```
+```{r for fisherz2r}
+library(psych)  # for fisherz2r
 
+# Values
+val1   <- fisherz2r(0.6578422)
+val_lo <- fisherz2r(0.6408413 )  # lower
+val_hi <- fisherz2r(0.6741981 )  # upper
+
+# Print them nicely
+cat("Main value :", val1, "\n")
+cat("Lower bound:", val_lo, "\n")
+cat("Upper bound:", val_hi, "\n")
+
+```
 
 ```{r Rank Order Stability: model for Negative affect}
 #For negative affects
@@ -255,11 +268,27 @@ dat.negative <- subset(data_youth, subset = data_youth$`Negative/Positive+LS` ==
 res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative)
 print(res, digits=3)
 
-fisherz2r(0.558)
-lower_bound <- (0.558- 1.96 *0.035) #lower bound
-upper_bound <- (0.558+ 1.96 *0.035) # upper_bound
-```
+fisherz2r(0.768 )
+lower_bound <- fisherz2r(0.768  - 1.96 *0.036) #lower bound
+upper_bound <- fisherz2r(0.768  + 1.96 *0.036) # upper_bound
 
+cat("Confidence interval: lower =", lower_bound, "\n")
+cat("Confidence interval: upper =", upper_bound, "\n")
+```
+```{r for fisherz2r}
+library(psych)  # for fisherz2r
+
+# Values
+val1   <- fisherz2r(0.645765)
+val_lo <- fisherz2r(0.6027403)  # lower
+val_hi <- fisherz2r(0.6850456)  # upper
+
+# Print them nicely
+cat("Main value :", val1, "\n")
+cat("Lower bound:", val_lo, "\n")
+cat("Upper bound:", val_hi, "\n")
+
+```
 
 ```{r Effect Size Analyses}
 
@@ -271,11 +300,6 @@ sum(dat.positive.corr$X10_Size)
 
 ```
 
-```{r Fischer for  Positive affects}
-fisherz2r(0.621) #fischer Z
-fisherz2r(0.5994) #lower bound
-fisherz2r(0.6425) #upper bound
-```
 
 ```{r}
 
@@ -286,12 +310,6 @@ print(res, digits=3)
 sum(dat.negative.corr$`10_Size`)
 ```
 
-
-```{r Fischer for  Negative affects}
-fisherz2r(0.558)
-fisherz2r(0.4894)
-fisherz2r(0.6266)
-```
 
 
 ```{r Age Effects}
@@ -332,6 +350,7 @@ print(res, digits=4)
 
 
 ```{r Moderator Analyses: 2}
+#Female+timelag+age
 res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive, mods = `18_Female`)
 print(res, digits=4)
 

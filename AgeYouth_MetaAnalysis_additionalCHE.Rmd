@@ -370,7 +370,7 @@ power_MADE(
 ```
 
 
-## Moderator analyses : Negative.Positive.LS
+## Moderator analyses : Negative.Positive.LS (0= Positive affect, 1= Negative Affect)
 
 ```{r che model study moderator, include = TRUE, cache = TRUE}
 
