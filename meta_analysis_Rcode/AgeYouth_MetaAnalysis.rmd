@@ -1,0 +1,1469 @@
+---
+title: "age_youth_Meta analysis: mean level change and rank order Stability for sequential"
+author: "Prerana Chandratre"
+date: "13/07/2025"
+output: html_document
+---
+
+```{r Load packages}
+library(readxl)             # Loads package for reading Excel files
+library(metafor)            # Loads metafor package for conducting meta-analyses
+library(psych)              # Loads psych package for descriptive statistics and psychometrics
+library(ggplot2)            # Loads ggplot2 for creating visualizations
+library(patchwork)          # Loads patchwork to combine multiple ggplots into one
+library(dplyr)
+
+theme_update(              # Updates global ggplot2 theme settings
+  plot.title = element_text(hjust = 0.5),            # Center-aligns plot titles
+  axis.text.x = element_text(color="black"),        # Sets x-axis text color to black
+  axis.text.y = element_text(color="black")         # Sets y-axis text color to black
+)
+
+```
+
+
+```{r Data transformation}
+data_aw <- read_xlsx("output/long_format_with_newcol.xlsx")  # Loads the dataset from Excel
+
+head(data_aw)
+```
+
+```{r Validation for accurate Output}
+# Sanity Check on Key Columns
+cols_to_check <- c("1_ID", "1.1_CaseID", "2_Author", "3_Year", "10_Size", "11_Mage", "16_CNT", "17_Eth", "18_Female","Negative/Positive+LS", "interval", "timepoints", "WBmi", "WBsdi", "WBmj", "WBsdj", "WBcorrij", "WBtitj",  "33_Relt1", "34_Relt")
+
+# Check if these columns exist in the data and print their types
+for (col in cols_to_check) {
+  if (col %in% names(data_aw)) {
+    cat(col, ":", class(data_aw[[col]]), "\n")
+  } else {
+    cat(col, ": NOT FOUND in data\n")
+  }
+}
+
+```
+
+```{r convert data type into numeric format}
+data_aw$`1.1_CaseID` <- as.numeric(data_aw$`1.1_CaseID`)            # Converts article ID to factor (categorical)
+data_aw$`2_Author` <- as.factor(data_aw$`2_Author`)          # Converts author name to factor
+data_aw$`11_Mage` <- as.numeric(data_aw$`11_Mage`)
+data_aw$`16_CNT` <- as.factor(data_aw$`16_CNT`)
+data_aw$`17_Eth` <- as.factor(data_aw$`17_Eth`)
+data_aw$`18_Female` <- as.numeric(data_aw$`18_Female`)
+data_aw$`Negative/Positive+LS` <- as.numeric(data_aw$`Negative/Positive+LS`)
+data_aw$`33_Relt1` <- as.numeric(data_aw$`33_Relt1`)
+data_aw$`34_Relt` <- as.numeric(data_aw$`34_Relt`)
+
+```
+
+```{r Adding unique ID for each row and count of CaseID}
+
+# Step 1: Add RowID and CaseID_Count
+data_aw <- data_aw %>%
+  mutate(RowID = row_number()) %>%
+  group_by(`1.1_CaseID`) %>%
+  mutate(CaseID_Count = n()) %>%
+  ungroup()
+
+# Step 2: Reorder columns to place RowID and CaseID_Count after X1.1_CaseID
+data_aw <- data_aw %>%
+  select(
+    '1_ID', '1.1_CaseID', RowID, CaseID_Count, everything()
+  )
+
+
+head(data_aw)
+
+```
+
+
+
+```{r Data cleaning and summary for mean age}
+# Step 1: Filter out NAs and 9999 to calculate mean
+clean_mage <- data_aw %>%
+  filter(!is.na(`11_Mage`) & `11_Mage` != 9999)
+
+# Step 2: Calculate rounded mean (2 digits)
+mean_mage <- round(mean(clean_mage$`11_Mage`, na.rm = TRUE), 2)
+cat("Mean of Mage (rounded to 2 decimals):", mean_mage, "\n")
+
+# Step 3: Replace 9999 with rounded mean
+data_aw <- data_aw %>%
+  mutate(`11_Mage` = ifelse(`11_Mage` == 9999, mean_mage, `11_Mage`))
+
+#Check summary
+summary(data_aw$`11_Mage`)
+
+```
+
+```{r considering only positive affect data }
+# Filter rows where Negative/Positive+LS == 0 and extract 1_IDs
+valid_ids <- data_aw %>%
+  filter(`Negative/Positive+LS` == 0) %>%
+  pull(`1_ID`)
+
+#cat("Filtered IDs where LS == 0:\n")
+#print(valid_ids)
+```
+
+```{r Seperating Country Column into World Region based on Country}
+# Add World Region based on country (16_CNT)
+data_aw <- data_aw %>%
+  mutate(region = case_when(
+    `16_CNT` %in% c("U.S.", "Canada") ~ "North America",
+    `16_CNT` %in% c("UK", "France", "Germany", "Italy", "Spain", "Netherlands", "Sweden", "Austria", "Belgium", "Croatia", "England", "Finland",  "Finnland", "Greek", "Norway", "Portugal", "Romania", "Russia", "Scotland", "Slovakia", "Spain", "Sweden", "Swiss", "Switzerland" , "Switzerland & Norway", "UK") ~ "Europe",
+    `16_CNT` %in% c("India", "China","Hong Kong", "Hong Kong, China", "Japan", "South Korea","Korea", "Taiwan", "Indonesia", "Vietnam", "Israel") ~ "Asia",
+    `16_CNT` %in% c("Brazil", "Argentina", "Mexico", "Chile", "Colombia", "Maxico") ~ "Latin America",
+    `16_CNT` %in% c("South Africa", "Nigeria", "Kenya", "Egypt") ~ "Africa",
+    `16_CNT` %in% c("Australia", "New Zealand") ~ "Oceania",
+    `16_CNT` %in% c("Canada", "U.S.") ~ "North America",
+    TRUE ~ "Other"
+  ))
+
+table(data_aw$'16_CNT')
+
+table(data_aw$region)
+```
+
+[World_Bank](https://datahelpdesk.worldbank.org/knowledgebase/articles/906519-world-bank-country-and-lending-groups)
+
+```{r Seperating Country Column intoEconomic Status based on Country }
+# Add World Bank Income Level to data_aw
+data_aw <- data_aw %>%
+  mutate(income_level = case_when(
+
+    # High-income countries
+`16_CNT` %in% c("United States", "U.S.", "Germany", "France", "Canada", "Australia", 
+                "UK", "United Kingdom", "Japan", "South Korea", "Netherlands", 
+                "Sweden", "Italy", "Spain", "Switzerland", "Austria", "Denmark", 
+                "Finland","Finnland", "Ireland", "Norway", "New Zealand", "Singapore",
+                "Belgium", "Croatia", "England", "Greece", "Portugal", "Scotland", 
+                "Slovakia", "Swiss", "Switzerland & Norway", "Hong Kong", 
+                "Hong Kong, China","Greek" ,"Taiwan", "Israel", "Chile", "Korea") ~ "High income",
+
+# Upper-middle income countries
+`16_CNT` %in% c("Brazil", "China", "Mexico", "South Africa", "Colombia", "Thailand",
+                "Argentina", "Indonesia", "Turkey", "Malaysia", "Peru", "Iran", 
+                "Russia", "Romania", "Costa Rica", "Panama", "Maxico") ~ "Upper middle income",
+
+# Lower-middle income countries
+`16_CNT` %in% c("India", "Kenya", "Vietnam", "Nigeria", "Philippines", "Ghana", 
+                "Bangladesh", "Pakistan", "Zambia", "Egypt", "Sri Lanka", "Cameroon") ~ "Lower middle income",
+
+# Low-income countries
+`16_CNT` %in% c("Uganda", "Mozambique", "Ethiopia", "Burundi", "Mali", "Chad", 
+                "South Sudan", "Malawi", "Togo", "Rwanda", "Yemen, Rep.") ~ "Low income",
+
+    TRUE ~ "Unknown"
+  ))
+
+
+table(data_aw$`region`)
+table(data_aw$`income_level`)
+```
+
+
+
+```{r Data Cleaning and summary for Timelag}
+# Step 1: Filter out NAs and 9999 to calculate mean
+clean_timelag <- data_aw %>%
+  filter(!is.na(`WBtitj`) & `WBtitj` != 9999)
+
+# Step 2: Calculate rounded mean (2 digits)
+mean_timelag <- round(mean(clean_timelag$`WBtitj`, na.rm = TRUE), 2)
+cat("Mean of timelag (rounded to 2 decimals):", mean_timelag, "\n")
+
+# Step 3: Replace 9999 with rounded mean
+data_aw <- data_aw %>%
+  mutate(`WBtitj` = ifelse(`WBtitj` == 9999, mean_timelag, `WBtitj`))
+
+# Optional: Check summary
+summary(data_aw$`WBtitj`)
+
+```
+
+
+```{r Relaability Data cleaning and adding avg column}
+
+# Clean column: 33_Relt1
+clean_relt1 <- data_aw %>%
+  filter(!is.na(`33_Relt1`) & `33_Relt1` != 9999)
+
+mean_relt1 <- round(mean(clean_relt1$`33_Relt1`, na.rm = TRUE), 2)
+cat("Mean of 33_Relt1 (rounded to 2 decimals):", mean_relt1, "\n")
+
+data_aw <- data_aw %>%
+  mutate(`33_Relt1` = ifelse(is.na(`33_Relt1`) | `33_Relt1` == 9999, mean_relt1, `33_Relt1`))
+
+# Clean column: 34_Relt
+clean_relt <- data_aw %>%
+  filter(!is.na(`34_Relt`) & `34_Relt` != 9999)
+
+mean_relt <- round(mean(clean_relt$`34_Relt`, na.rm = TRUE), 2)
+cat("Mean of 34_Relt (rounded to 2 decimals):", mean_relt, "\n")
+
+data_aw <- data_aw %>%
+  mutate(`34_Relt` = ifelse(is.na(`34_Relt`) | `34_Relt` == 9999, mean_relt, `34_Relt`))
+
+# Optional: Check summaries
+summary(data_aw$`33_Relt1`)
+summary(data_aw$`34_Relt`)
+
+
+# Calculating Avg for each ID and adding in new column
+# Step 1: Calculate row-wise average of 33_Relt1 and 34_Relt
+data_aw <- data_aw %>%
+  mutate(avg_rel = rowMeans(select(., `33_Relt1`, `34_Relt`), na.rm = TRUE))
+
+# Step 2: Replace NA or NaN in avg_rel with overall mean (rounded to 2 digits)
+mean_avg_rel <- round(mean(data_aw$avg_rel, na.rm = TRUE), 2)
+
+data_aw <- data_aw %>%
+  mutate(avg_rel = ifelse(is.na(avg_rel) | is.nan(avg_rel), mean_avg_rel, avg_rel))
+
+# Step 3: Round final values and relocate
+data_aw <- data_aw %>%
+  mutate(avg_rel = round(avg_rel, 2)) %>%
+  relocate(avg_rel, .after = `34_Relt`)
+
+```
+
+
+```{r regression and quadratic effects for mean}
+# Year of birth (yob) = Year at T1 minus mean age
+# dat <- transform(dat, yob = `3_Year` - `WBmt1`) Birth year?
+
+# Center and scale age at T1 (mean age)
+
+data_aw <- transform(data_aw, agem1ic1 = (data_aw$`11_Mage` - 13.72) / 1)
+
+# Square of centered-scaled age
+#data_aw <- transform(data_aw, agem1ic2 = WBmi^2)
+data_aw <- transform(data_aw, agem1ic2 = agem1ic1^2)
+
+# Cube of centered-scaled age
+#data_aw <- transform(data_aw, agem1ic3 = WBmi^3)
+data_aw <- transform(data_aw, agem1ic3 = agem1ic1^3)
+
+# Center time lag
+data_aw <- transform(data_aw, timelagc = WBtitj -  0.99) # WBtitj - mean of timelag # in NArcissism they also have -ve timelags in some cases
+
+# Estimate age at T2 as age at T1 + time lag
+data_aw <- transform(data_aw, agem2i = (`11_Mage`) + WBtitj)
+
+# Convert percent female to proportion
+#dat <- transform(dat, female = dat$`X18_Female` / 100) # as we already have in % in original data
+
+```
+
+
+```{r Computation of Effect Sizes of Mean-Level Change}
+# Step 1: Calculate mean correlation (excluding NA and 9999)
+data_aw$WBcorrij[data_aw$WBcorrij %in% c(9999, "9999", "", NA)] <- NA
+data_aw$WBcorrij <- as.numeric(data_aw$WBcorrij)
+data_aw$corrmean <- mean(data_aw$WBcorrij, na.rm = TRUE)
+
+# Step 2: Replace missing correlations with the mean
+data_aw$corrx <- ifelse(is.na(data_aw$WBcorrij), data_aw$corrmean, data_aw$WBcorrij)
+
+# Step 3: Compute effect size (Cohen’s d) as difference between mean2 and mean1 divided by SD1
+# (mean2 = WBmj, mean1 = WBmi, SD1 = WBsdi)
+data_aw <- transform(data_aw, es_d = (WBmj - WBmi) / WBsdi)
+
+# Step 4: Annualized effect size: divide by time lag
+data_aw <- transform(data_aw, es_dyear = es_d / WBtitj)
+
+# Step 5: Compute variance of d
+data_aw <- transform(data_aw, v_d = ((2 * (1 - corrx) / `10_Size`) + (es_d^2 / (2 * `10_Size`))))
+
+# Step 6: Annualized variance
+data_aw <- transform(data_aw, v_dyear = v_d / (WBtitj^2))
+
+data_aw
+```
+
+```{r Checking Descriptive anaylsis for Estimated effect size}
+summary(data_aw$es_d)
+```
+
+```{r Data cleaning and replacing none values for Female column}
+# Replacing 9999 values from Female % column
+# Step 1: Filter out NAs and 9999 to calculate mean
+clean_female <- data_aw %>%
+  filter(!is.na(`18_Female`) & `18_Female` != 9999)
+
+# Step 2: Calculate rounded mean (2 digits)
+mean_female <- round(mean(clean_female$`18_Female`, na.rm = TRUE), 2)
+cat("Mean of X18_Female (rounded to 2 decimals):", mean_female, "\n")
+
+# Step 3: Replace 9999 with rounded mean
+data_aw <- data_aw %>%
+  mutate(`18_Female` = ifelse(`18_Female` == 9999, mean_female, `18_Female`))
+
+# Optional: Check summary
+summary(data_aw$`18_Female`)
+
+```
+
+```{r Summary Statistics for timepoints and Gender}
+summary(data_aw$timepoints)
+summary(data_aw$`18_Female`)
+
+```
+
+```{r  Calculate standardized mean change}
+library(metafor)
+
+# Make sure your data is in the proper format
+dat_meta <- data_aw %>%
+  rename(
+    mean1 = WBmi,         # baseline mean
+    mean2 = WBmj,         # follow-up mean
+    sd1   = WBsdi,        # baseline SD
+    n     =`10_Size`,     # sample size
+    r     = WBcorrij,     # correlation  # r = WBcorrij
+    study = `1_ID`        # unique ID for study/case
+  ) %>%
+  mutate(
+    n = suppressWarnings(as.numeric(n))  # convert n into numeric for calculations
+  )
+
+
+# Calculate standardized mean change with raw score standardization
+dat_meta_escalc <- escalc(
+  measure = "SMCR",
+  m1i = mean2,      # follow-up mean
+  m2i = mean1,      # baseline mean
+  sd1i = sd1,       # baseline SD
+  ni = n,           # sample size
+  ri = r,           # correlation
+  data = dat_meta,
+  #slab = study      # study label
+)
+
+head(dat_meta_escalc)
+```
+
+
+```{r fit random-effects model and examine results}
+# Filter out rows with missing yi or vi
+dat_meta_complete <- dat_meta_escalc %>%
+  filter(!is.na(yi) & !is.na(vi))
+
+res <- rma(yi, vi, data=dat_meta_complete)
+res
+```
+
+
+```{r Subset by happiness factors}
+# Subset data for Positive/ Life Satisfaction (0)
+dat.positive <- subset(data_aw, subset = data_aw$`Negative/Positive+LS` == 0)
+
+# Subset data for Negative Life Satisfaction (1)
+dat.negative <- subset(data_aw, subset = data_aw$`Negative/Positive+LS` == 1)
+
+```
+
+
+```{r Calcuting number of positive and Negative values}
+sum(data_aw$`Negative/Positive+LS` == 0)
+sum(data_aw$`Negative/Positive+LS`== 1)
+```
+
+
+```{r Subsets and Filtering Based on Life Satisfaction}
+
+# Subset data for Positive/ Life Satisfaction (0)
+dat.positive2 <- subset(data_aw, subset = data_aw$`Negative/Positive+LS` == 0)
+
+# Subset data for Negative Life Satisfaction (1)
+dat.negative2 <- subset(data_aw, subset = data_aw$`Negative/Positive+LS` == 1)
+
+# Keep only non-missing yearly effect sizes (es_dyear)
+dat.positive2.es_dyear <- subset(dat.positive2, !is.na(dat.positive2$es_dyear))
+dat.negative2.es_dyear <- subset(dat.negative2, !is.na(dat.negative2$es_dyear))
+
+```
+
+
+```{r check overall data summary}
+summary(dat.positive2)
+```
+```{r checking number of values in each timelag}
+table(data_aw$WBtitj)
+```
+
+
+```{r splitting timelag into small and big}
+# ============================================================
+# Create subsets for different timelag categories (AgeWell data)
+# ============================================================
+
+# Convert timelag to numeric if needed
+data_aw$WBtitj <- as.numeric(data_aw$WBtitj)
+
+# 3 months or less (≈ 0.25 years)
+data_aw_timelag_3m <- subset(data_aw, WBtitj <= 0.25)
+
+# 6 months or less (≈ 0.5 years)
+data_aw_timelag_short <- subset(data_aw, WBtitj <= 0.5)
+
+# More than 6 months (long-term)
+data_aw_timelag_long <- subset(data_aw, WBtitj > 0.5)
+
+# Optional: Check counts
+cat("Count of cases with timelag ≤ 3 months:", nrow(data_aw_timelag_3m), "\n")
+cat("Count of cases with timelag ≤ 6 months:", nrow(data_aw_timelag_short), "\n")
+cat("Count of cases with timelag > 6 months:", nrow(data_aw_timelag_long), "\n")
+
+```
+
+
+```{r Checking Ethnecity in the data}
+table(data_aw$`17_Eth`)
+```
+
+```{r Splitting Ethnecity into White and Other}
+# Subset: White only
+data_aw_white <- subset(data_aw, `17_Eth` == "White/European")
+
+# Subset: All others
+data_aw_other <- subset(data_aw, `17_Eth` != "White/European")
+
+# Count White
+white_count <- count(data_aw_white)
+cat("Count of participants identified as White/European:", white_count$n, "\n")
+
+# Count Other
+other_count <- count(data_aw_other)
+cat("Count of participants identified as Other ethnicity:", other_count$n, "\n")
+
+```
+
+```{r multilevel random effect code: for positive effect}
+
+
+res <- rma.mv(yi=es_dyear, V=v_dyear, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive2) 
+#changed here with unique ID
+
+
+res
+res$b
+```
+
+
+```{r multilevel random effect code for negative effect}
+
+res <- rma.mv(yi=es_dyear, V=v_dyear, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative2) #changed here with unique ID
+
+res
+res$b
+```
+
+
+```{r three-level random effect model with between study variances }
+#res_model2<- rma.mv(yi=es_dyear, V=v_dyear, 
+                 #  random = ~ 1 | X1.1_CaseID, data=dat.positive)
+
+#res
+                  
+```
+
+
+```{r Visualization: Hypothetical Linear Slopes for Each Trait}
+library(ggplot2)
+
+dat.mlachange <- data.frame(x = c(9.50, 19))
+# Creates a minimal data frame with age range from 9.25 to 20 to use as x-axis base
+
+ggplot(dat.mlachange, aes(x, y)) +
+  
+  labs(x = "Age", y = "Cumulative d value") +
+  scale_x_continuous(breaks = seq(2,6,1), lim = c(9.50, 19), expand = c(0, 0)) + # should we take 2,3,6? because timelag min max values
+  # Sets x-axis breaks every 10 years, limits from 9 to 20 with no margin padding
+  
+  scale_y_continuous(breaks = seq(-0.8, 0.2, 0.2), lim = c(-0.8, 0.8), expand = c(0, 0)) + # Which one should we consider?
+  # Sets y-axis breaks and limits for cumulative d-values from -0.8 to 0.2
+  
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black", linewidth = 1) +
+  geom_abline(intercept = -0.03947127 * -9.50, slope = -0.0395, linetype = "solid", color = "black", linewidth = 1) + # for positive # -9.50 is min of age
+  
+  geom_abline(intercept = 0.02703036 * -9.50, slope = 0.0270, linetype = "solid", color = "black", linewidth = 1) + # for negative
+  
+  annotate("text", x = 70, y = -0.2, label = "Positive/LS") +
+  annotate("text", x = 69, y = -0.3, label = "Negative") +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.line = element_line(colour = "black"))
+
+# Adds text annotations labeling each trajectory at different y-values
+
+#ggsave(file="fig1.eps", width=5, height=3.75)
+# Saves the plot as an EPS file with specified dimensions
+```
+
+```{r Creating Subsamples based on Correlations}
+
+# Correlation-based subsamples
+dat.positive.corr <- subset(dat.positive, subset = corrx != "NA")
+dat.negative.corr <- subset(dat.negative, subset = corrx != "NA")
+
+```
+
+
+```{r Data Cleaning For Size Column}
+# Step 1: Filter out NAs and 9999 to calculate mean
+clean_size <- data_aw %>%
+  filter(!is.na(`10_Size`) & `10_Size` != 9999)
+
+# Step 2: Calculate rounded mean (2 digits)
+mean_size <- round(mean(clean_size$`10_Size`, na.rm = TRUE), 2)
+cat("Mean of X10_Size (rounded to 2 decimals):", mean_size, "\n")
+
+# Step 3: Replace 9999 with rounded mean
+data_aw <- data_aw %>%
+  mutate(`10_Size` = ifelse(`10_Size` == 9999, mean_size, `10_Size`))
+
+# Optional: Check summary
+summary(data_aw$`10_Size`)
+
+```
+```{r Saving final processed data for further model use}
+# Load library
+library(writexl)
+
+# Save the processed data_aw to Excel
+write_xlsx(data_aw, "output/processed_data_aw.xlsx")
+
+```
+
+
+```{r Female Proportion Descriptive Stats}
+mean(data_aw$`18_Female`, na.rm = TRUE)  
+# Mean proportion of females across samples (NA values ignored)
+
+min(data_aw$`18_Female`, na.rm = TRUE)  
+# Minimum proportion of females
+
+max(data_aw$`18_Female`, na.rm = TRUE)  
+# Maximum proportion of females
+
+sd(data_aw$`18_Female`, na.rm = TRUE)  
+# Standard deviation of female proportion
+
+median(data_aw$`18_Female`, na.rm = TRUE)  
+# Median proportion of females
+
+```
+
+
+```{r Descriptive Statistics for Time Lag}
+describe(data_aw$timepoints, skew=TRUE)  # timepoints
+# Produces detailed descriptive stats for time lag, including skewness (via `psych::describe`)
+
+describe(data_aw$WBtitj, skew=TRUE)  # timelag by codebook 
+```
+
+```{r Multilevel Analysis: mean level change for positive and negative affect}
+# Effect Size Analyses
+res <- rma.mv(yi=es_dyear, V=v_dyear, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive) #updated unique RowID
+# Fits a multilevel random-effects model for positive factor
+#   - yi: annualized effect size (d per year)
+#   - V: corresponding variance
+#   - random effects: nested structure (caseid within sampid)
+
+
+print(res, digits=3)
+# Prints model results with 3 decimal places
+
+cat("Total number of people based on sample size for positive affect:", 
+    sum(dat.positive$`10_Size`, na.rm = TRUE), "\n")
+# Total number of participants used in positive effect size analysis (sample-level)
+
+res <- rma.mv(yi=es_dyear, V=v_dyear, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative) #updated unique RowID
+# Same as above, but for negative factor
+
+print(res, digits=3)
+# Outputs model results
+
+cat("Total number of people based on sample size for negative affect:", 
+    sum(dat.negative$`10_Size`, na.rm = TRUE), "\n")
+# Total participants in negative group
+
+```
+```{r Multilevel Analysis: mean level change for small and large time lag}
+# Effect Size Analyses
+# Also do for +ve and -ve also PAY ATTENTION
+res <- rma.mv(yi=es_dyear, V=v_dyear, random = ~ 1 | `1.1_CaseID`/RowID, data=data_aw_timelag_short)
+# Fits a multilevel random-effects model for positive factor
+#   - yi: annualized effect size (d per year)
+#   - V: corresponding variance
+#   - random effects: nested structure (caseid within sampid)
+
+
+print(res, digits=3)
+# Prints model results with 3 decimal places
+
+res <- rma.mv(yi=es_dyear, V=v_dyear, random = ~ 1 | `1.1_CaseID`/RowID, data=data_aw_timelag_long)
+# Same as above, but for negative factor
+
+print(res, digits=3)
+# Outputs model results
+
+
+```
+
+
+```{r Age Effects: Modeling the effect of age on yearly change for positive factor}
+
+res <- rma.mv(yi=es_dyear, V=v_dyear, random = ~ 1 | `1.1_CaseID`/RowID,
+               data=dat.positive, mods = cbind(agem1ic1))
+# Positive: meta-regression with linear effect of age (centered and scaled)
+
+print(res, digits=4)
+# Print results with 4 decimal places
+
+res <- rma.mv(yi=es_dyear, V=v_dyear, random = ~ 1 | `1.1_CaseID`/RowID,
+              data=dat.positive, mods = cbind(agem1ic1, agem1ic2))
+# Positive: includes both linear and quadratic age terms
+
+print(res, digits=4)
+# Display results
+
+res <- rma.mv(yi=es_dyear, V=v_dyear, random = ~ 1 | `1.1_CaseID`/RowID,
+               data=dat.positive, mods = cbind(agem1ic1, agem1ic2, agem1ic3))
+# Positive: adds cubic age term
+
+print(res, digits=4)
+# Output for 3rd-order polynomial model
+
+```
+```{r Age Effects: Modeling the effect of age on yearly change for Negative factors:}
+
+# Model 1: Age effect with 1 linear moderator
+res <- rma.mv(yi = es_dyear, V = v_dyear, 
+              random = ~ 1 | `1.1_CaseID`/RowID,   # Random effects: nested structure (RowID within CaseID)
+              data = dat.negative, 
+              mods = cbind(agem1ic1))             # Include first age-related moderator (linear term)
+print(res, digits = 4)   # Print results with 4 decimal places
+
+
+# Model 2: Age effect with linear + quadratic moderator
+res <- rma.mv(yi = es_dyear, V = v_dyear, 
+              random = ~ 1 | `1.1_CaseID`/RowID,   # Same nested random-effects structure
+              data = dat.negative, 
+              mods = cbind(agem1ic1, agem1ic2))   # Add quadratic (squared) age term as moderator
+print(res, digits = 4)
+
+
+# Model 3: Age effect with linear + quadratic + cubic moderators
+res <- rma.mv(yi = es_dyear, V = v_dyear, 
+              random = ~ 1 | `1.1_CaseID`/RowID,   # Same nested random-effects structure
+              data = dat.negative, 
+              mods = cbind(agem1ic1, agem1ic2, agem1ic3))  # Add cubic age term as moderator
+print(res, digits = 4)
+
+```
+
+
+```{r Age Effects: Modeling the effect of age on yearly change for small time lag}
+
+# Model 1: Linear age effect for short time lags
+res <- rma.mv(yi = es_dyear, V = v_dyear, 
+              random = ~ 1 | `1.1_CaseID`/RowID,   # Random effects: accounts for nested structure (rows within cases)
+              data = data_aw_timelag_short,       # Subset of data with small/short time lags
+              mods = cbind(agem1ic1))             # Linear age moderator
+print(res, digits = 4)   # Print results with 4 decimal places
+
+
+# Model 2: Linear + quadratic age effects for short time lags
+res <- rma.mv(yi = es_dyear, V = v_dyear, 
+              random = ~ 1 | `1.1_CaseID`/RowID,   # Same random-effects structure
+              data = data_aw_timelag_short, 
+              mods = cbind(agem1ic1, agem1ic2))   # Include quadratic (squared) age moderator
+print(res, digits = 4)
+
+
+# Model 3: Linear + quadratic + cubic age effects for short time lags
+res <- rma.mv(yi = es_dyear, V = v_dyear, 
+              random = ~ 1 | `1.1_CaseID`/RowID,   # Same random-effects structure
+              data = data_aw_timelag_short, 
+              mods = cbind(agem1ic1, agem1ic2, agem1ic3))  # Add cubic age moderator
+print(res, digits = 4)
+```
+
+
+```{r Age Effects: Modeling the effect of age on yearly change for long time lag}
+# Model 1: Linear age effect for long time lags
+res <- rma.mv(yi = es_dyear, V = v_dyear, 
+              random = ~ 1 | `1.1_CaseID`/RowID,   # Random effects: nested structure (rows within cases)
+              data = data_aw_timelag_long,        # Subset of data with long time lags
+              mods = cbind(agem1ic1))             # Linear age moderator
+print(res, digits = 4)   # Print results with 4 decimal places
+
+
+# Model 2: Linear + quadratic age effects for long time lags
+res <- rma.mv(yi = es_dyear, V = v_dyear, 
+              random = ~ 1 | `1.1_CaseID`/RowID,   # Same random-effects structure
+              data = data_aw_timelag_long, 
+              mods = cbind(agem1ic1, agem1ic2))   # Add quadratic (squared) age moderator
+print(res, digits = 4)
+
+
+# Model 3: Linear + quadratic + cubic age effects for long time lags
+res <- rma.mv(yi = es_dyear, V = v_dyear, 
+              random = ~ 1 | `1.1_CaseID`/RowID,   # Same random-effects structure
+              data = data_aw_timelag_long, 
+              mods = cbind(agem1ic1, agem1ic2, agem1ic3))  # Add cubic age moderator
+print(res, digits = 4)
+```
+
+
+```{r Correlation  Analysis: wellbeing + ethnicity} 
+
+# Subset based on Positive Affect group (LS = 0)
+#dat.positive <- subset(data_aw, Negative.Positive.LS == 0)   # Keep only rows classified as Positive Affect
+
+# Then subset within Positive group by ethnicity
+dat.positive_white <- subset(dat.positive, `17_Eth` == "White/European")   # Positive Affect + White/European subgroup
+dat.positive_other <- subset(dat.positive, `17_Eth` != "White/European")   # Positive Affect + all other ethnicities
+
+# Ensure WBmi and WBmj are numeric (convert if they are factors/characters)
+dat.positive_white$WBmi <- as.numeric(as.character(dat.positive_white$WBmi))
+dat.positive_white$WBmj <- as.numeric(as.character(dat.positive_white$WBmj))
+
+dat.positive_other$WBmi <- as.numeric(as.character(dat.positive_other$WBmi))
+dat.positive_other$WBmj <- as.numeric(as.character(dat.positive_other$WBmj))
+
+# Run correlation tests  White/European group
+cat("White group  Correlation: % Female vs WBmi\n")
+print(cor.test(dat.positive_white$`18_Female`, dat.positive_white$WBmi))   # Correlation between %Female and WBmi
+
+cat("\n White group Correlation: % Female vs WBmj\n")
+print(cor.test(dat.positive_white$`18_Female`, dat.positive_white$WBmj))   # Correlation between %Female and WBmj
+
+# Run correlation tests Other ethnicities group
+cat("\n Other ethnicities Correlation: % Female vs WBmi\n")
+print(cor.test(dat.positive_other$`18_Female`, dat.positive_other$WBmi))   # Correlation between %Female and WBmi
+
+cat("\n Other ethnicities Correlation: % Female vs WBmj\n")
+print(cor.test(dat.positive_other$`18_Female`, dat.positive_other$WBmj))   # Correlation between %Female and WBmj
+
+```
+
+
+```{r correlation analysis: effect size + ethnicity + wellbeing}
+
+# Subset based on Positive Affect group (LS = 0)
+#dat.positive <- subset(data_aw, Negative.Positive.LS == 0)
+
+# Subset by ethnicity
+dat.positive_white <- subset(dat.positive, `17_Eth` == "White/European")
+dat.positive_other <- subset(dat.positive, `17_Eth` != "White/European")
+
+# Ensure numeric conversion of variables (if necessary)
+dat.positive_white$WBmi <- as.numeric(as.character(dat.positive_white$WBmi))
+dat.positive_white$WBmj <- as.numeric(as.character(dat.positive_white$WBmj))
+dat.positive_white$`10_Size` <- as.numeric(as.character(dat.positive_white$`10_Size` ))
+
+dat.positive_other$WBmi <- as.numeric(as.character(dat.positive_other$WBmi))
+dat.positive_other$WBmj <- as.numeric(as.character(dat.positive_other$WBmj))
+dat.positive_other$`10_Size`  <- as.numeric(as.character(dat.positive_other$`10_Size` ))
+
+# Run correlations White group
+#cat(" White group Correlation: Sample Size vs WBmi\n")
+#print(cor.test(dat.positive_white$X10_Size, dat.positive_white$WBmi))
+
+#cat("\n White group Correlation: Sample Size vs WBmj\n")
+print(cor.test(dat.positive_white$`10_Size` , dat.positive_white$WBmj))
+
+# Run correlations Other group
+#cat("\n Other ethnicities Correlation: Sample Size vs WBmi\n")
+print(cor.test(dat.positive_other$`10_Size` , dat.positive_other$WBmi))
+
+#cat("\n Other ethnicities Correlation: Sample Size vs WBmj\n")
+print(cor.test(dat.positive_other$`10_Size` , dat.positive_other$WBmj))
+
+
+```
+
+
+```{r Displaying Boxplot}
+# Increase bottom margin to fit rotated labels
+par(mar = c(8, 4, 4, 2) + 0.1)
+
+# Boxplot for WBmi
+boxplot(WBmi ~ region, data = dat.positive, 
+        main = "Mean i", 
+        xlab = "", 
+        las = 2,            # Rotate labels perpendicular to axis
+        cex.axis = 0.8)     # Shrink label text size
+
+# Boxplot for WBmj
+boxplot(WBmj ~ region, data = dat.negative, 
+        main = "Mean j", 
+        xlab = "", 
+        las = 2, 
+        cex.axis = 0.8)
+
+# Boxplot for effect size
+boxplot(es_d ~ region, data = dat.positive, 
+        main = "Effect Size", 
+        xlab = "", 
+        las = 2, 
+        cex.axis = 0.8)
+
+```
+
+
+```{r Multivariate Moderator Models for Mean-Level Change}
+# Positive effect size model
+res_pos <- rma.mv(yi = es_dyear, V = v_dyear,
+                  random = ~ 1 | `1.1_CaseID`/RowID,
+                  data = dat.positive,
+                  mods = ~ `18_Female` + factor(region))
+cat("\n  Positive Moderator Model \n")
+print(res_pos, digits = 4)
+
+# Negative effect size model
+res_neg <- rma.mv(yi = es_dyear, V = v_dyear,
+                  random = ~ 1 | `1.1_CaseID`/RowID,
+                  data = dat.negative,
+                  mods = ~ `18_Female` + factor(region))
+cat("\n Negative Moderator Model \n")
+print(res_neg, digits = 4)
+
+
+```
+
+
+```{r Moderator Meta-Analyses for positive and Negative affects}
+#  Moderator Meta-Analyses 
+# Explore whether gender, region, economic status, and timelag explain variability in:
+# - Mean-level change (es_dyear)
+# - Well-being at time 1 (WBmi) and time 2 (WBmj)
+
+# Step 1: Create subsets for positive and negative affect groups
+dat.positive <- subset(data_aw, `Negative/Positive+LS` == 0 & 
+                       !is.na(`18_Female`) & 
+                       !is.na(region) & 
+                       !is.na(income_level) & 
+                       !is.na(WBtitj))
+
+dat.negative <- subset(data_aw, `Negative/Positive+LS` == 1 & 
+                       !is.na(`18_Female`) & 
+                       !is.na(region) & 
+                       !is.na(income_level) & 
+                       !is.na(WBtitj))
+
+# Step 2: Convert categorical moderators to numeric (for correlation tests)
+dat.positive$region_num <- as.numeric(as.factor(dat.positive$region))
+dat.positive$income_level_num <- as.numeric(as.factor(dat.positive$income_level))
+
+dat.negative$region_num <- as.numeric(as.factor(dat.negative$region))
+dat.negative$income_level_num <- as.numeric(as.factor(dat.negative$income_level))
+
+# Step 3: Correlations for Positive Affect group
+cat("Positive Affect Group:\n")
+cat("Correlation: Gender (% Female) vs Income Level\n")
+print(cor.test(dat.positive$`18_Female`, dat.positive$income_level_num))
+
+cat("\nCorrelation: Gender (% Female) vs Region\n")
+print(cor.test(dat.positive$`18_Female`, dat.positive$region_num))
+
+cat("\nCorrelation: Gender vs Timelag\n")
+print(cor.test(dat.positive$`18_Female`, dat.positive$WBtitj))
+
+cat("\nCorrelation: Sample Size vs T1 Well-being (WBmi)\n")
+print(cor.test(dat.positive$`18_Female`, dat.positive$WBmi))
+
+cat("\nCorrelation: Sample Size vs T2 Well-being (WBmj)\n")
+print(cor.test(dat.positive$`18_Female`, dat.positive$WBmj))
+
+cat("\nCorrelation: Gender vs Mean-Level Change (es_dyear)\n")
+print(cor.test(dat.positive$`18_Female`, dat.positive$es_dyear))
+
+# Step 4: Correlations for Negative Affect group
+cat("\n Negative Affect Group:\n")
+cat("Correlation: Gender (% Female) vs Income Level\n")
+print(cor.test(dat.negative$`18_Female`, dat.negative$income_level_num))
+
+cat("\nCorrelation: Gender (% Female) vs Region\n")
+print(cor.test(dat.negative$`18_Female`, dat.negative$region_num))
+
+cat("\nCorrelation: Gender vs Timelag\n")
+print(cor.test(dat.negative$`18_Female`, dat.negative$WBtitj))
+
+cat("\nCorrelation: Sample Size vs T1 Well-being (WBmi)\n")
+print(cor.test(dat.negative$`10_Size`, dat.negative$WBmi))
+
+cat("\nCorrelation: Sample Size vs T2 Well-being (WBmj)\n")
+print(cor.test(dat.negative$`10_Size`, dat.negative$WBmj))
+
+cat("\nCorrelation: Gender vs Mean-Level Change (es_dyear)\n")
+print(cor.test(dat.negative$`18_Female`, dat.negative$es_dyear))
+
+```
+
+
+```{r Multilevel meta-analysis for timelag only}
+#  Multilevel meta-analysis for timelag positive
+
+res_pos <- rma.mv(yi = es_dyear, V = v_dyear,
+                  random = ~ 1 | `1.1_CaseID`/RowID,
+                  data = dat.positive,
+                  mods = ~  WBtitj)
+
+cat("\n Multilevel model Positive Affect:\n")
+print(res_pos, digits = 4)
+
+
+#negative only timelag
+res_pos <- rma.mv(yi = es_dyear, V = v_dyear,
+                  random = ~ 1 | `1.1_CaseID`/RowID,
+                  data = dat.negative,
+                  mods = ~  WBtitj)
+
+cat("\n Multilevel model Positive Affect:\n")
+print(res_pos, digits = 4)
+```
+
+
+
+```{r Multilevel meta-analysis for Gender, Region, Income level and Timelag}
+library(metafor)
+
+#Multilevel meta-analysis including all moderators
+# Positive group
+res_pos <- rma.mv(yi = es_dyear, V = v_dyear,
+                  random = ~ 1 | `1.1_CaseID`/RowID,
+                  data = dat.positive,
+                  mods = ~ `18_Female` + factor(region) + factor(income_level) + WBtitj)
+
+cat("\n Multilevel model Positive Affect:\n")
+print(res_pos, digits = 4)
+
+
+
+# Negative group
+res_neg <- rma.mv(yi = es_dyear, V = v_dyear,
+                  random = ~ 1 | `1.1_CaseID`/RowID,
+                  data = dat.negative,
+                  mods = ~ `18_Female` + factor(region) + factor(income_level) + WBtitj)
+
+cat("\n Multilevel model Negative Affect:\n")
+print(res_neg, digits = 4)
+
+```
+
+
+```{r Linear regression for female and mean level change for positive affect}
+library(ggplot2)
+
+ggplot(dat.positive, aes(x = `18_Female`, y = es_dyear)) +
+  geom_point(alpha = 0.6, color = "#2c3e50") +
+  geom_smooth(method = "lm", se = TRUE, color = "#2980b9") +
+  labs(
+    title = "Effect Size vs. % Female (Positive Affect Group)",
+    x = "% Female in Sample",
+    y = "Mean-Level Change (es_dyear)"
+  ) +
+  theme_minimal()
+
+```
+
+
+```{r  Linear regression for female and effect size for positive affect}
+ggplot(dat.positive, aes(x = `18_Female`, y = es_dyear, size = `10_Size`)) +
+  geom_point(alpha = 0.6, color = "#2c3e50") +
+  geom_smooth(method = "lm", se = TRUE, color = "#2980b9") +
+  labs(
+    title = "Effect Size vs. % Female",
+    x = "% Female",
+    y = "Effect Size",
+    size = "Sample Size"
+  ) +
+  theme_minimal()
+
+```
+
+```{r random-effects meta-analysis on Positive Affect data}
+
+# Fit a random-effects meta-analysis model on Positive Affect data
+res <- rma(yi = es_dyear, vi = v_dyear, 
+           random = ~ 1 | `1.1_CaseID`/RowID,   # Random effects: rows nested within cases
+           data = dat.positive)
+
+# Perform Egger's regression test for funnel plot asymmetry (publication bias check)
+regtest(res)
+
+```
+
+
+```{r Positive Publication Bias}
+# Positive Publication Bias
+
+# Step 1: Standard random-effects meta-analysis
+res <- rma(yi = es_dyear, vi = v_dyear, data = dat.positive)
+# Random-effects model using the simpler `rma()` (not multilevel) on Positive data
+
+print(res, digits = 3)
+
+# Step 2: Egger's test for publication bias
+regtest(res)
+# Egger's regression test for funnel plot asymmetry (publication bias)
+
+# Step 3: Multilevel meta-regression with publication status as moderator (Q: is year correct? to consider publication bias ? they use published/unpublished status
+res_mv <- rma.mv(yi = es_dyear, V = v_dyear,
+                 random = ~ 1 | `1.1_CaseID`/RowID,
+                 data = dat.positive,
+                 mods = ~ `3_Year` )
+# Multilevel model with publication status (X3_year) as moderator
+
+print(res_mv, digits = 3)
+
+# Step 4: Frequency table of publication status
+table(dat.positive$`3_Year`)
+
+```
+
+
+
+```{r Positive Affect: Funnel plot}
+
+# Fit a simple random-effects meta-analysis model for Positive Affect group
+res <- rma(yi = es_dyear, vi = v_dyear, 
+           random = ~ 1 | `1.1_CaseID`/RowID,   # Random effects: rows nested within cases
+           data = dat.positive)
+# Simple model for Positive group
+
+print(res, digits = 3)   # Print results rounded to 3 decimals
+
+
+# Test for funnel plot asymmetry (small-study effects / publication bias)
+regtest(res)   # Eggers regression test
+
+
+# Plot funnel plot for Positive Affect group
+funnel(res, 
+       xlab = "Effect Size (d per year)",      # X-axis: effect size
+       ylab = "Standard Error",                # Y-axis: study precision
+       main = "Positive Affect")               # Title of plot
+
+# Add custom text annotation on the plot (e.g., "P" for Positive)
+mtext("P", side = 3, line = 2.4, adj = -0.16, cex = 1.0)  
+# You can also add values like p-value or Eggers test result here, e.g.:
+# mtext(paste0("Egger p = ", round(regtest(res)$pval, 3)), side = 3, line = 2.4, adj = 0, cex = 0.8)
+
+
+# Fit a multilevel model with moderator (Year of study)
+res <- rma.mv(yi = es_dyear, V = v_dyear, 
+              random = ~ 1 | `1.1_CaseID`/RowID,   # Random nested effects
+              data = dat.positive, 
+              mods = cbind(`3_Year`))             # Include publication year as moderator
+
+# Positive: multilevel model with publication year moderator
+print(res, digits = 3)   # Print model with moderator effect
+
+
+# Check distribution of Year variable in Positive group
+table(dat.positive$`3_Year`)   # Frequency table of publication years
+
+```
+
+
+```{r Negative Affect : Funnel plot}
+# Fit a simple random-effects meta-analysis model for Negative Affect group
+res <- rma(yi = es_dyear, vi = v_dyear,  
+           random = ~ 1 | `1.1_CaseID`/RowID,   # Random effects: rows nested within cases
+           data = dat.negative)
+# Simple model for Negative group
+
+print(res, digits = 3)   # Print results rounded to 3 decimals
+
+
+# Test for funnel plot asymmetry (publication bias / small-study effects)
+regtest(res)   # Eggers regression test
+
+
+# Plot funnel plot for Negative Affect group
+funnel(res, 
+       xlab = "Effect Size (d per year)",   # X-axis: effect sizes
+       ylab = "Standard Error",             # Y-axis: measure of precision
+       main = "Negative Affect")            # Title of the funnel plot
+
+# Add custom text annotation "N" (for Negative) above the plot
+mtext("N", side = 3, line = 2.4, adj = -0.16, cex = 1.0)  
+# You can also add values like Eggers test p-value here, for example:
+# mtext(paste0("Egger's p = ", round(regtest(res)$pval, 3)), side = 3, line = 1.5, adj = 0, cex = 0.8)
+
+
+# Fit a multilevel model with moderator (publication year) for Negative group
+res <- rma.mv(yi = es_dyear, V = v_dyear, 
+              random = ~ 1 | `1.1_CaseID`/RowID,   # Random nested effects
+              data = dat.negative, 
+              mods = cbind(`3_Year`))              # Publication year as moderator
+
+# Negative: multilevel model with publication year moderator
+print(res, digits = 3)   # Print model results with moderator effect
+
+
+# Show frequency table of publication years in the Negative group
+table(dat.negative$`3_Year`)   # Distribution of study years
+```
+
+
+```{r Both Positive and Negative Funnel plots}
+# Create multiple plots (e.g., in a 3-row layout)
+par(mfrow = c(2, 1)) 
+
+# Positive funnel
+res1 <- rma(yi = es_dyear, vi = v_dyear, data = dat.positive)
+funnel(res1, main = "Positive")
+
+# Negative funnel
+res2 <- rma(yi = es_dyear, vi = v_dyear, data = dat.negative)
+funnel(res2, main = "Negative")
+
+
+# Now record the full set of plots
+fig2 <- recordPlot()
+
+```
+
+
+```{r Save Combined Funnel Plots}
+# Create the plot (e.g., funnel plot)
+res <- rma(yi = es_dyear, vi = v_dyear, data = dat.positive)
+funnel(res, xlab = "Effect Size (d per year)", ylab = "SE")
+
+fig2 <- recordPlot()
+# Stores the current plotting device (all funnel plots) in memory
+
+# Just display the stored plot in the running environment
+fig2
+
+```
+
+
+
+```{r Aggregate values for Lollipop graph}
+# --- Aggregate values for Lollipop graph (5-year bins) ---
+agg_df <- data_aw %>%
+  mutate(decade = floor(as.numeric(`3_Year`) / 5) * 5) %>%
+  group_by(region, decade) %>%
+  summarise(
+    mean_es = mean(es_dyear, na.rm = TRUE),
+    n       = dplyr::n(),
+    .groups = "drop"  # avoids message and ungroups safely
+  ) %>%
+  mutate(
+    decade = as.factor(decade),
+    effect = ifelse(mean_es >= 0, "Positive", "Negative")
+  )
+
+
+```
+
+
+```{r Lollipop graph: based on region}
+# --- Lollipop graph: mean effect per year by region and 5-year bin ---
+ggplot(agg_df, aes(x = decade, y = mean_es, label = round(mean_es, 2))) +
+  geom_segment(aes(xend = decade, y = 0, yend = mean_es), color = "black") +
+  geom_point(aes(color = effect), size = 3) +
+  geom_text(
+    color = "white", size = 2.5,
+    vjust = ifelse(agg_df$mean_es > 0, 1.5, -0.5)
+  ) +
+  facet_grid(effect ~ region, scales = "free_y", space = "free_y") +
+  labs(
+    title = "Mean Effect per Year by Region and 5-Year Bin",
+    subtitle = "Effect direction shown by color and facets",
+    x = "5-Year Bin",
+    y = "Mean Effect per Year"
+  ) +
+  theme_bw() +
+  theme(
+    strip.text = element_text(size = 9, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "none"
+  )
+
+
+```
+
+
+
+
+```{r Lollipop graph: based on income level}
+# --- Prepare data with effect per year and decade binning ---
+res_df <- dat_meta_complete %>%
+  mutate(
+    effect = ifelse(es_dyear >= 0, "Positive", "Negative"),
+    decade = floor(as.numeric(`X3_Year`) / 10) * 10
+  ) %>%
+  filter(!is.na(decade), !is.na(income_level), !is.na(es_dyear))
+
+# --- Aggregate mean effect per year by income level and decade ---
+agg_df <- res_df %>%
+  group_by(income_level, effect, decade) %>%
+  summarise(
+    mean_es = mean(es_dyear, na.rm = TRUE),
+    n       = dplyr::n(),
+    .groups = "drop"
+  ) %>%
+  mutate(decade = as.factor(decade))
+
+# --- Lollipop plot: mean effect per year by income level and decade ---
+ggplot(agg_df, aes(x = decade, y = mean_es, label = round(mean_es, 2), color = effect)) +
+  geom_segment(aes(xend = decade, y = 0, yend = mean_es), color = "black") +
+  geom_point(size = 3) +
+  geom_text(
+    color = "white", size = 2.5,
+    vjust = ifelse(agg_df$mean_es > 0, 1.5, -0.5)
+  ) +
+  facet_grid(effect ~ income_level, scales = "free_y", space = "free_y") +
+  labs(
+    title = "Mean Effect Sizes by Income Level and Decade",
+    subtitle = "Effect direction based on es_dyear (no z-score)",
+    x = "Decade",
+    y = "Mean Effect per Year"
+  ) +
+  theme_bw() +
+  theme(
+    strip.text = element_text(size = 9, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "none"
+  )
+
+```
+
+
+```{r Computation of Effect Sizes of Rank-Order Stability}
+
+# Adjust correlations for reliability (disattenuated correlation) # we decided to skip rank order stability for now
+data_aw$corrdis <- with(data_aw, data_aw$WBcorrij / data_aw$avg_rel) #rel?
+data_aw$corrdis <- ifelse(data_aw$corrdis >= 0.99, 0.99, data_aw$corrdis)  # Cap extreme values
+
+# Fisher z transformation
+data_aw$corrdis_z <- fisherz(data_aw$corrdis)  # or use metafor::fisherz()
+
+# Variance of z (The -3 comes from the mathematical derivation of the sampling distribution of the Fisher z-transformed correlation. When you compute the standard error of the transformed z-score, it accounts for:
+
+#The fact that correlations have a non-normal distribution (especially when 
+#r is large or small)
+#The Fisher z-transformation stabilizes the variance
+#The degrees of freedom adjustment happens as a result of how the variance of z is estimated from the correlation sampling distribution
+#It corrects for the bias in small samples.
+#It ensures the variance estimate is valid under the Fisher transformation.)
+
+data_aw$v_corr <- 1 / (data_aw$`10_Size` - 3)
+data_aw$v_corrdis <- data_aw$v_corr / (data_aw$avg_rel*data_aw$avg_rel)
+
+# Compute 95% Confidence Intervals in z-space
+data_aw$ci_lower_z <- data_aw$corrdis - 1.96 * data_aw$v_corrdis
+data_aw$ci_upper_z <- data_aw$corrdis + 1.96 * data_aw$v_corrdis
+
+# Back-transform to r (correlation space)
+data_aw$ci_lower_r <- fisherz2r(data_aw$ci_lower_z)
+data_aw$ci_upper_r <- fisherz2r(data_aw$ci_upper_z)
+
+```
+
+
+
+```{r Rank Order Stability: model for Positive affect}
+#For Positive affects
+dat.positive <- subset(data_aw, subset = data_aw$`Negative/Positive+LS` == 0)
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive)
+print(res, digits=3)
+
+fisherz2r(0.619  )
+lower_bound <- (0.619  -1.96 *0.011)
+upper_bound <- (0.619  +1.96 *0.011)
+
+cat("Confidence interval: lower =", lower_bound, "\n")
+cat("Confidence interval: upper =", upper_bound, "\n")
+
+```
+
+```{r for fisherz2r}
+library(psych)  # for fisherz2r
+
+# Values
+val1   <- fisherz2r(0.5504314)
+val_lo <- fisherz2r(0.59744   )  # lower
+val_hi <- fisherz2r(0.64056   )  # upper
+
+# Print them nicely
+cat("Main value :", val1, "\n")
+cat("Lower bound:", val_lo, "\n")
+cat("Upper bound:", val_hi, "\n")
+
+
+```
+
+```{r Rank Order Stability: model for Negative affect}
+#For negative affects
+dat.negative <- subset(data_aw, subset = data_aw$`Negative/Positive+LS` == 1)
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative)
+print(res, digits=3)
+
+fisherz2r(0.558)
+lower_bound <- (0.558- 1.96 *0.035) #lower bound
+upper_bound <- (0.558+ 1.96 *0.035) # upper_bound
+
+cat("Confidence interval: lower =", lower_bound, "\n")
+cat("Confidence interval: upper =", upper_bound, "\n")
+```
+
+```{r for fisherz2r}
+library(psych)  # for fisherz2r
+
+# Values
+val1   <- fisherz2r(0.506492)
+val_lo <- fisherz2r(0.4894   )  # lower
+val_hi <- fisherz2r(0.6266   )  # upper
+
+# Print them nicely
+cat("Main value :", val1, "\n")
+cat("Lower bound:", val_lo, "\n")
+cat("Upper bound:", val_hi, "\n")
+
+
+```
+
+```{r Effect Size Analyses}
+
+#For Positive affects
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive)
+print(res, digits=3)
+
+sum(dat.positive.corr$X10_Size)
+
+```
+`
+
+```{r}
+
+# For Negative affects
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative)
+print(res, digits=3)
+
+sum(dat.negative.corr$`10_Size`)
+```
+
+
+
+```{r Age Effects}
+# for Positive
+
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive, mods = cbind(agem1ic1))
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive, mods = cbind(agem1ic1, agem1ic2))
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive, mods = cbind(agem1ic1, agem1ic2, agem1ic3))
+print(res, digits=4)
+```
+
+```{r Age Effects}
+# For Negative
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative, mods = cbind(agem1ic1))
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative, mods = cbind(agem1ic1, agem1ic2))
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative, mods = cbind(agem1ic1, agem1ic2, agem1ic3))
+print(res, digits=4)
+
+```
+
+```{r Moderator Analyses: 1}
+# For positive and Negative Female + Effect size
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive, mods = cbind(`18_Female`, timelagc))
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative, mods = cbind(`18_Female`, timelagc))
+print(res, digits=4)
+
+```
+
+
+```{r Moderator Analyses: 2}
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive, mods = `18_Female`)
+print(res, digits=4)
+
+# For P and N, Female + mean age
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive, mods = cbind(`18_Female`, agem1ic1, timelagc))
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative, mods = cbind(`18_Female`, agem1ic1, timelagc))
+print(res, digits=4)
+```
+
+
+```{r Moderator Analyses: 3}
+# For P and N, Female + ethnicity
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive, mods = cbind(`18_Female`, `17_Eth`, timelagc))
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative, mods = cbind(`18_Female`, `17_Eth`, timelagc))
+print(res, digits=4)
+```
+
+
+```{r Moderator Analyses: 4}
+# For P and N, Female + income (Q: How to do for char variable?)
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive, mods = cbind(`18_Female`, factor(income_level), timelagc))
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative, mods = cbind(`18_Female`, factor(income_level), timelagc))
+print(res, digits=4)
+```
+
+
+```{r Effect Size Analyses Controlled for Time Lag}
+#For Positive
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive, mods = cbind(timelagc))
+print(res, digits=3)
+
+
+#For Negative
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative, mods = cbind(timelagc))
+print(res, digits=3)
+
+sum(dat.negative.corr$`10_Size`)
+
+
+```
+
+
+```{r Age Effects Controlled for Time Lag}
+
+#cor.test(data_aw$WBmi, data_aw$WBtitj)
+
+# For Positive
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive, mods = cbind(agem1ic1, timelagc))
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive, mods = cbind(agem1ic1, agem1ic2, timelagc))
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive, mods = cbind(agem1ic1, agem1ic2, agem1ic3, timelagc))
+print(res, digits=4)
+
+# For Negative
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative, mods = cbind(agem1ic1, timelagc))
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative, mods = cbind(agem1ic1, agem1ic2, timelagc))
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative, mods = cbind(agem1ic1, agem1ic2, agem1ic3, timelagc))
+print(res, digits=4)
+```
+

@@ -1,0 +1,418 @@
+---
+title: "AgeYouth_Rank order Stability including Sequential and Non-Sequential"
+author: "Prerana"
+date: "2025-10-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Load packages}
+library(readxl)             # Loads package for reading Excel files
+library(metafor)            # Loads metafor package for conducting meta-analyses
+library(psych)              # Loads psych package for descriptive statistics and psychometrics
+library(ggplot2)            # Loads ggplot2 for creating visualizations
+library(patchwork)          # Loads patchwork to combine multiple ggplots into one
+library(dplyr)
+library(writexl)
+
+theme_update(              # Updates global ggplot2 theme settings
+  plot.title = element_text(hjust = 0.5),            # Center-aligns plot titles
+  axis.text.x = element_text(color="black"),        # Sets x-axis text color to black
+  axis.text.y = element_text(color="black")         # Sets y-axis text color to black
+)
+
+```
+
+
+```{r Data transformation}
+data_youth <- read_xlsx("output/final_combined_highlighted.xlsx")  # Loads the dataset from Excel
+
+head(data_youth)
+```
+
+```{r}
+# =============================================================
+# Add demographic and study columns from long_format_with_newcol
+# to final_combined_highlighted based on (1_ID, 1.1_CaseID)
+# =============================================================
+
+# --- File paths ---
+file_final <- "output/final_combined_highlighted.xlsx"
+file_long  <- "output/long_format_with_newcol.xlsx"
+
+# --- Read both files ---
+final_df <- read_xlsx(file_final)
+long_df  <- read_xlsx(file_long)
+
+# --- Columns to transfer ---
+cols_to_add <- c("1_ID", "1.1_CaseID",
+                 "11_Mage", "16_CNT", "17_Eth", "18_Female",
+                 "Negative/Positive+LS", "30_Covid",
+                 "31_WBm", "33_Relt1", "34_Relt")
+
+# --- Check column existence ---
+missing_cols <- setdiff(cols_to_add, names(long_df))
+if (length(missing_cols) > 0) {
+  stop("Missing columns in long_format_with_newcol.xlsx: ",
+       paste(missing_cols, collapse = ", "))
+}
+
+# --- Select and remove duplicates ---
+long_keep <- long_df %>%
+  select(all_of(cols_to_add)) %>%
+  distinct(`1_ID`, `1.1_CaseID`, .keep_all = TRUE)
+
+# --- Merge by IDs ---
+data_youth <- final_df %>%
+  left_join(long_keep, by = c("1_ID", "1.1_CaseID"))
+
+# --- Optional: save output (uncomment if needed)
+ write_xlsx(data_youth, "output/final_combined_output.xlsx")
+
+# --- Confirmation ---
+cat("Data merged successfully and stored in object 'data_youth'\n")
+cat("Rows:", nrow(data_youth), " | Columns:", ncol(data_youth), "\n")
+
+```
+
+```{r convert data type into numeric format}
+data_youth$`1.1_CaseID` <- as.numeric(data_youth$`1.1_CaseID`)            # Converts article ID to factor (categorical)
+data_youth$`2_Author` <- as.factor(data_youth$`2_Author`)          # Converts author name to factor
+data_youth$`11_Mage` <- as.numeric(data_youth$`11_Mage`)
+data_youth$`16_CNT` <- as.factor(data_youth$`16_CNT`)
+data_youth$`17_Eth` <- as.factor(data_youth$`17_Eth`)
+data_youth$`18_Female` <- as.numeric(data_youth$`18_Female`)
+data_youth$`Negative/Positive+LS` <- as.numeric(data_youth$`Negative/Positive+LS`)
+data_youth$`33_Relt1` <- as.numeric(data_youth$`33_Relt1`)
+data_youth$`34_Relt` <- as.numeric(data_youth$`34_Relt`)
+
+```
+
+
+```{r Relaability Data cleaning and adding avg column}
+
+# Clean column: 33_Relt1
+clean_relt1 <- data_youth %>%
+  filter(!is.na(`33_Relt1`) & `33_Relt1` != 9999)
+
+mean_relt1 <- round(mean(clean_relt1$`33_Relt1`, na.rm = TRUE), 2)
+cat("Mean of 33_Relt1 (rounded to 2 decimals):", mean_relt1, "\n")
+
+data_youth <- data_youth %>%
+  mutate(`33_Relt1` = ifelse(is.na(`33_Relt1`) | `33_Relt1` == 9999, mean_relt1, `33_Relt1`))
+
+# Clean column: 34_Relt
+clean_relt <- data_youth %>%
+  filter(!is.na(`34_Relt`) & `34_Relt` != 9999)
+
+mean_relt <- round(mean(clean_relt$`34_Relt`, na.rm = TRUE), 2)
+cat("Mean of 34_Relt (rounded to 2 decimals):", mean_relt, "\n")
+
+data_youth <- data_youth %>%
+  mutate(`34_Relt` = ifelse(is.na(`34_Relt`) | `34_Relt` == 9999, mean_relt, `34_Relt`))
+
+# Optional: Check summaries
+summary(data_youth$`33_Relt1`)
+summary(data_youth$`34_Relt`)
+
+
+# Calculating Avg for each ID and adding in new column
+# Step 1: Calculate row-wise average of 33_Relt1 and 34_Relt
+data_youth <- data_youth %>%
+  mutate(avg_rel = rowMeans(select(., `33_Relt1`, `34_Relt`), na.rm = TRUE))
+
+# Step 2: Replace NA or NaN in avg_rel with overall mean (rounded to 2 digits)
+mean_avg_rel <- round(mean(data_youth$avg_rel, na.rm = TRUE), 2)
+
+data_youth <- data_youth %>%
+  mutate(avg_rel = ifelse(is.na(avg_rel) | is.nan(avg_rel), mean_avg_rel, avg_rel))
+
+# Step 3: Round final values and relocate
+data_youth <- data_youth %>%
+  mutate(avg_rel = round(avg_rel, 2)) %>%
+  relocate(avg_rel, .after = `34_Relt`)
+
+```
+
+```{r}
+# =============================================================
+# Add age-related columns from processed_data_aw.xlsx to data_youth
+# =============================================================
+
+# --- File path for adult well-being processed data ---
+file_aw <- "output/processed_data_aw.xlsx"
+
+# --- Read the data file ---
+data_aw <- read_xlsx(file_aw)
+
+# --- Columns to add ---
+cols_to_add_aw <- c("1_ID", "1.1_CaseID",
+                    "agem1ic1", "agem1ic2", "agem1ic3",
+                    "timelagc", "agem2i")
+
+# --- Check for missing columns ---
+missing_cols_aw <- setdiff(cols_to_add_aw, names(data_aw))
+if (length(missing_cols_aw) > 0) {
+  stop("Missing columns in processed_data_aw.xlsx: ",
+       paste(missing_cols_aw, collapse = ", "))
+}
+
+# --- Select unique pairs of IDs with required columns ---
+aw_keep <- data_aw %>%
+  select(all_of(cols_to_add_aw)) %>%
+  distinct(`1_ID`, `1.1_CaseID`, .keep_all = TRUE)
+
+# --- Merge with existing data_youth ---
+data_youth <- data_youth %>%
+  left_join(aw_keep, by = c("1_ID", "1.1_CaseID"))
+
+# --- Optional: save updated dataset
+# write_xlsx(data_youth, "output/final_combined_output_with_age.xlsx")
+
+# --- Confirmation ---
+cat("Age-related columns added successfully to 'data_youth'\n")
+cat("Rows:", nrow(data_youth), " | Columns:", ncol(data_youth), "\n")
+
+```
+
+
+```{r Adding unique ID for each row and count of CaseID}
+
+# Step 1: Add RowID and CaseID_Count
+data_youth <- data_youth %>%
+  mutate(RowID = row_number()) %>%
+  group_by(`1.1_CaseID`) %>%
+  mutate(CaseID_Count = n()) %>%
+  ungroup()
+
+# Step 2: Reorder columns to place RowID and CaseID_Count after X1.1_CaseID
+data_youth <- data_youth %>%
+  select(
+    '1_ID', '1.1_CaseID', RowID, CaseID_Count, everything()
+  )
+
+
+head(data_youth)
+
+```
+
+# Rank order Stability for Seq and non-Seq
+```{r Computation of Effect Sizes of Rank-Order Stability}
+
+# Adjust correlations for reliability (disattenuated correlation) # we decided to skip rank order stability for now
+data_youth$corrdis <- with(data_youth, data_youth$WBcorrij / data_youth$avg_rel) #rel?
+data_youth$corrdis <- ifelse(data_youth$corrdis >= 0.99, 0.99, data_youth$corrdis)  # Cap extreme values
+
+# Fisher z transformation
+data_youth$corrdis_z <- fisherz(data_youth$corrdis)  # or use metafor::fisherz()
+
+# Variance of z (The -3 comes from the mathematical derivation of the sampling distribution of the Fisher z-transformed correlation. When you compute the standard error of the transformed z-score, it accounts for:
+
+#The fact that correlations have a non-normal distribution (especially when 
+#r is large or small)
+#The Fisher z-transformation stabilizes the variance
+#The degrees of freedom adjustment happens as a result of how the variance of z is estimated from the correlation sampling distribution
+#It corrects for the bias in small samples.
+#It ensures the variance estimate is valid under the Fisher transformation.)
+
+data_youth$v_corr <- 1 / (data_youth$`10_Size` - 3)
+data_youth$v_corrdis <- data_youth$v_corr / (data_youth$avg_rel*data_youth$avg_rel)
+
+# Compute 95% Confidence Intervals in z-space
+data_youth$ci_lower_z <- data_youth$corrdis - 1.96 * data_youth$v_corrdis
+data_youth$ci_upper_z <- data_youth$corrdis + 1.96 * data_youth$v_corrdis
+
+# Back-transform to r (correlation space)
+data_youth$ci_lower_r <- fisherz2r(data_youth$ci_lower_z)
+data_youth$ci_upper_r <- fisherz2r(data_youth$ci_upper_z)
+
+```
+
+
+
+```{r Rank Order Stability: model for Positive affect}
+#For Positive affects
+dat.positive <- subset(data_youth, subset = data_youth$`Negative/Positive+LS` == 0)
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive)
+print(res, digits=3)
+
+fisherz2r(0.789)
+lower_bound <- fisherz2r(0.789-1.96 *0.015)
+upper_bound <- fisherz2r(0.789+1.96 *0.015)
+
+cat("Confidence interval: lower =", lower_bound, "\n")
+cat("Confidence interval: upper =", upper_bound, "\n")
+
+```
+```{r for fisherz2r}
+library(psych)  # for fisherz2r
+
+# Values
+val1   <- fisherz2r(0.6578422)
+val_lo <- fisherz2r(0.6408413 )  # lower
+val_hi <- fisherz2r(0.6741981 )  # upper
+
+# Print them nicely
+cat("Main value :", val1, "\n")
+cat("Lower bound:", val_lo, "\n")
+cat("Upper bound:", val_hi, "\n")
+
+```
+
+```{r Rank Order Stability: model for Negative affect}
+#For negative affects
+dat.negative <- subset(data_youth, subset = data_youth$`Negative/Positive+LS` == 1)
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative)
+print(res, digits=3)
+
+fisherz2r(0.768 )
+lower_bound <- fisherz2r(0.768  - 1.96 *0.036) #lower bound
+upper_bound <- fisherz2r(0.768  + 1.96 *0.036) # upper_bound
+
+cat("Confidence interval: lower =", lower_bound, "\n")
+cat("Confidence interval: upper =", upper_bound, "\n")
+```
+```{r for fisherz2r}
+library(psych)  # for fisherz2r
+
+# Values
+val1   <- fisherz2r(0.645765)
+val_lo <- fisherz2r(0.6027403)  # lower
+val_hi <- fisherz2r(0.6850456)  # upper
+
+# Print them nicely
+cat("Main value :", val1, "\n")
+cat("Lower bound:", val_lo, "\n")
+cat("Upper bound:", val_hi, "\n")
+
+```
+
+```{r Effect Size Analyses}
+
+#For Positive affects
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive)
+print(res, digits=3)
+
+sum(dat.positive.corr$X10_Size)
+
+```
+
+
+```{r}
+
+# For Negative affects
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative)
+print(res, digits=3)
+
+sum(dat.negative.corr$`10_Size`)
+```
+
+
+
+```{r Age Effects}
+# for Positive
+
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive, mods = cbind(agem1ic1))
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive, mods = cbind(agem1ic1, agem1ic2))
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive, mods = cbind(agem1ic1, agem1ic2, agem1ic3))
+print(res, digits=4)
+```
+
+```{r Age Effects}
+# For Negative
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative, mods = cbind(agem1ic1))
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative, mods = cbind(agem1ic1, agem1ic2))
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative, mods = cbind(agem1ic1, agem1ic2, agem1ic3))
+print(res, digits=4)
+
+```
+
+```{r Moderator Analyses: 1}
+# For positive and Negative Female + Effect size
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive, mods = cbind(`18_Female`, timelagc))
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative, mods = cbind(`18_Female`, timelagc))
+print(res, digits=4)
+
+```
+
+
+```{r Moderator Analyses: 2}
+#Female+timelag+age
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive, mods = `18_Female`)
+print(res, digits=4)
+
+# For P and N, Female + mean age
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive, mods = cbind(`18_Female`, agem1ic1, timelagc))
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative, mods = cbind(`18_Female`, agem1ic1, timelagc))
+print(res, digits=4)
+```
+
+
+```{r Moderator Analyses: 3}
+# For P and N, Female + ethnicity
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive, mods = cbind(`18_Female`, `17_Eth`, timelagc))
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative, mods = cbind(`18_Female`, `17_Eth`, timelagc))
+print(res, digits=4)
+```
+
+
+```{r Effect Size Analyses Controlled for Time Lag}
+#For Positive
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive, mods = cbind(timelagc))
+print(res, digits=3)
+
+
+#For Negative
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative, mods = cbind(timelagc))
+print(res, digits=3)
+
+sum(dat.negative.corr$`10_Size`)
+
+
+```
+
+
+```{r Age Effects Controlled for Time Lag}
+
+#cor.test(data_youth$WBmi, data_youth$WBtitj)
+
+# For Positive
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive, mods = cbind(agem1ic1, timelagc))
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive, mods = cbind(agem1ic1, agem1ic2, timelagc))
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.positive, mods = cbind(agem1ic1, agem1ic2, agem1ic3, timelagc))
+print(res, digits=4)
+
+# For Negative
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative, mods = cbind(agem1ic1, timelagc))
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative, mods = cbind(agem1ic1, agem1ic2, timelagc))
+print(res, digits=4)
+
+res <- rma.mv(yi=corrdis, V=v_corrdis, random = ~ 1 | `1.1_CaseID`/RowID, data=dat.negative, mods = cbind(agem1ic1, agem1ic2, agem1ic3, timelagc))
+print(res, digits=4)
+```
+
+
+
