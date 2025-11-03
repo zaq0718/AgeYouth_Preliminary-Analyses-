@@ -393,15 +393,25 @@ summary(dat.positive2)
 table(data_aw$WBtitj)
 ```
 
-
 ```{r splitting timelag into small and big}
-# Create subset where timelag is 6 months or less
+# ============================================================
+# Create subsets for different timelag categories (AgeWell data)
+# ============================================================
+
+# Convert timelag to numeric if needed
+data_aw$WBtitj <- as.numeric(data_aw$WBtitj)
+
+# 3 months or less (≈ 0.25 years)
+data_aw_timelag_3m <- subset(data_aw, WBtitj <= 0.25)
+
+# 6 months or less (≈ 0.5 years)
 data_aw_timelag_short <- subset(data_aw, WBtitj <= 0.5)
 
-# Create subset where timelag is more than 6 months
+# More than 6 months (long-term)
 data_aw_timelag_long <- subset(data_aw, WBtitj > 0.5)
 
 # Optional: Check counts
+cat("Count of cases with timelag ≤ 3 months:", nrow(data_aw_timelag_3m), "\n")
 cat("Count of cases with timelag ≤ 6 months:", nrow(data_aw_timelag_short), "\n")
 cat("Count of cases with timelag > 6 months:", nrow(data_aw_timelag_long), "\n")
 
