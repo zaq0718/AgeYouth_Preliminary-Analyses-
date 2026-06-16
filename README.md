@@ -5,6 +5,7 @@ The data, code, and results available in this repository are part of the **preli
 
 ## Accessing the Preliminary Materials
 To access the preliminary data, code, and results:
+1. You are now under the branch **`main**.
 1. Click the branch selector near the top-left of the repository page.
 2. Select the branch named **`dev-clean`**.
 3. The relevant data, code, and results will then be available within that branch.
