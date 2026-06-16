@@ -10,5 +10,5 @@ To access the preliminary data, code, and results:
 2. Select the branch named **`dev-clean`**.
 3. The relevant data, code, and results will then be available within that branch.
 
-Please note that the materials may be revised before publication.
+Please note that the materials will be revised before publication.
 
